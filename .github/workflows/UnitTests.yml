@@ -1,0 +1,48 @@
+#
+# Catch2 unit tests for the pure-logic units under test/unit.
+#
+# The unit test target links neither DuckDB nor OpenSSL (see test/unit/CMakeLists.txt),
+# so it needs no vcpkg and runs in about a minute, which makes it a cheap gate in
+# front of the multi-platform extension build.
+#
+name: Unit Tests
+
+on:
+  workflow_call:
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Run unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check for committed credentials
+        run: scripts/check_no_secrets.sh
+
+      - name: Build and run unit tests
+        run: make test_unit
+
+  unit-tests-sanitizer:
+    name: Run unit tests with ASan/UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and run sanitizer unit tests
+        run: |
+          cmake -S test/unit -B build/unit_tests_asan \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-sanitize-recover=all' \
+            -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
+          cmake --build build/unit_tests_asan --parallel 4
+          ASAN_OPTIONS=halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/unit_tests_asan/unit_tests

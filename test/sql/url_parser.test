@@ -1,0 +1,60 @@
+# name: test/sql/url_parser.test
+# description: browser URL handling as observed through the read_* table functions
+# group: [sql]
+
+# Component level extraction (app_token / table / view, wiki paths, ports,
+# fragments, percent encoding, case folding, override precedence) is asserted in
+# test/unit/bitable/test_url_parser.cpp, which exercises the parser directly.
+# This file covers what is observable through SQL: URL validation happens during
+# bind, before any credential lookup or network call.
+
+require feishu_bitable
+
+statement error
+SELECT * FROM read_feishu_bitable('https://example.com/base/bascn123456');
+----
+Invalid Input Error: read_feishu_bitable: input is not hosted on a Feishu or Lark domain
+
+statement error
+SELECT * FROM read_bitable('https://example.com/base/bascn123456');
+----
+Invalid Input Error: read_bitable: input is not hosted on a Feishu or Lark domain
+
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/docs/bascn123456');
+----
+Invalid Input Error: read_feishu_bitable: cannot extract an app_token from input
+
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/');
+----
+Invalid Input Error: read_feishu_bitable: cannot extract an app_token from input
+
+# Without a scheme the argument is a bare app_token, not a malformed URL, so bind
+# continues to credential resolution instead of failing on the URL shape.
+statement error
+SELECT * FROM read_feishu_bitable('sample.feishu.cn/base/bascn123456');
+----
+Invalid Input Error: No feishu secret is available
+
+# A well formed URL also reaches credential resolution.
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/bascn123456?table=tbl789012&view=vew345678');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_bitable('https://sample.larksuite.com/base/bascn123456?table=tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/wiki/wikcn987654?table=tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+# The classic function never parses URLs: the argument stays a literal app_token.
+statement error
+SELECT * FROM feishu_bitable_scan('https://example.com/base/bascn123456', 'tbl789012');
+----
+Invalid Input Error: No feishu secret is available

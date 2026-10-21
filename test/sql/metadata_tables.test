@@ -1,0 +1,89 @@
+# name: test/sql/metadata_tables.test
+# description: offline bind and schema tests for feishu_bitable_tables
+# group: [sql]
+
+require feishu_bitable
+
+# LIMIT 0 and optimizer-eliminated scans must still validate credentials.
+statement error
+SELECT * FROM feishu_bitable_tables('app_token') LIMIT 0;
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', SECRET = '__metadata_missing_secret__') LIMIT 0;
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', SECRET = '__metadata_missing_secret__') WHERE false;
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# Schema discovery validates the local Secret without exchanging a token.
+statement ok
+CREATE TEMPORARY SECRET named_secret (TYPE feishu, APP_ID '<app_id>', APP_SECRET '<app_secret>');
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM feishu_bitable_tables('app_token'));
+----
+table_id	VARCHAR
+name	VARCHAR
+revision	BIGINT
+
+query I
+SELECT count(*)
+FROM (DESCRIBE SELECT * FROM feishu_bitable_tables('app_token', SECRET = 'named_secret'));
+----
+3
+
+# The named parameter is accepted without changing the public return schema;
+# LIMIT 0 still performs table-function binding.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM feishu_bitable_tables(
+    'app_token', SECRET = 'named_secret'
+) LIMIT 0);
+----
+table_id	VARCHAR
+name	VARCHAR
+revision	BIGINT
+
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', SECRET = NULL) LIMIT 0;
+----
+Invalid Input Error: feishu_bitable_tables: secret must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_tables(NULL);
+----
+Invalid Input Error: feishu_bitable_tables: app_token must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_tables('');
+----
+Invalid Input Error: feishu_bitable_tables: app_token must not be empty
+
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', SECRET = NULL);
+----
+Invalid Input Error: feishu_bitable_tables: secret must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', SECRET = '');
+----
+Invalid Input Error: feishu_bitable_tables: secret must not be empty
+
+# Credential resolution happens before any HTTP request.
+statement error
+SELECT count(*) FROM feishu_bitable_tables('app_token', SECRET = '__metadata_missing_secret__');
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# Unknown names are rejected by DuckDB's table-function binder rather than
+# being silently ignored.
+statement error
+SELECT * FROM feishu_bitable_tables('app_token', VIEW_ID = 'view_id');
+----
+Binder Error: Invalid named parameter "VIEW_ID" for function feishu_bitable_tables

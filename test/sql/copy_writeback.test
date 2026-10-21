@@ -1,0 +1,198 @@
+# name: test/sql/copy_writeback.test
+# description: COPY TO feishu_bitable registration, bind validation and option contract
+# group: [sql]
+
+#
+# Offline only: every assertion below must fail before any network request is
+# issued, so the file needs no credentials. The contract it pins down lives in
+# .specs/03_API_CONTRACT.md section 8.
+
+require feishu_bitable
+
+# An unexpected network failure must fail this offline suite, never skip it.
+set ignore_error_messages
+
+# --- Option layer -----------------------------------------------------------
+
+# Unknown options are rejected by DuckDB's copy-option machinery.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, not_an_option 'x');
+----
+Unrecognized option
+
+# batch_size is frozen to [1, 500] by section 8.2.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, batch_size 501);
+----
+batch_size
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, batch_size 0);
+----
+batch_size
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, batch_size -1);
+----
+batch_size
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, batch_size 'abc');
+----
+Could not convert string 'abc' to INT64
+
+# user_id_type is a registered WRITE_ONLY option (section 8.2); illegal values
+# fail at Bind. Recognition is proven by the absence of Unrecognized option.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY', user_id_type 'Open_Id');
+----
+user_id_type
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY', user_id_type '');
+----
+user_id_type
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY', user_id_type 'employee_id');
+----
+user_id_type
+
+# A legal user_id_type advances past option parsing to credential resolution.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY', user_id_type 'open_id');
+----
+feishu_bitable: no TYPE feishu secret
+
+# file_extension is the one generic write option the extension can still see.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, file_extension 'csv');
+----
+file_extension
+
+# --- Bind layer: target resolution ------------------------------------------
+
+# Duplicate names must be rejected before DuckDB's generic COPY binder can
+# silently rename the second source column to name_1.
+statement error
+COPY (SELECT 1 AS duplicate_name, 2 AS duplicate_name) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable);
+----
+duplicate source column
+
+# UHUGEINT is not in the v0.2 numeric source allow-list (HUGEINT is the
+# largest supported integer type), so this is rejected before credentials or
+# network metadata are consulted.
+statement error
+COPY (SELECT CAST(1 AS UHUGEINT) AS id) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
+----
+UHUGEINT
+
+# Writeback never falls back to the first table of a Base (section 8.1).
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable);
+----
+table_id
+
+# Bind cannot be bypassed by an empty input: the target is still resolved.
+statement error
+COPY (SELECT 1 AS id FROM range(0)) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable);
+----
+table_id
+
+# A non-Bitable URL is rejected by the shared read-side parser.
+statement error
+COPY (SELECT 1 AS id) TO 'https://example.com/not-a-bitable' (FORMAT feishu_bitable);
+----
+not hosted on a Feishu
+
+# --- Bind layer: credentials -------------------------------------------------
+
+# No TYPE feishu secret exists in this offline run, so credential resolution
+# fails with the feishu_bitable prefix before any HTTP request is issued.
+statement error
+COPY (SELECT 1 AS id) TO 'https://example.feishu.cn/base/bascnXXXXXXXX?table=tblYYYYYYYY' (FORMAT feishu_bitable);
+----
+feishu_bitable: no TYPE feishu secret
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, table_id 'tblYYYYYYYY', secret 'missing_feishu');
+----
+does not exist or is not a usable TYPE feishu secret
+
+# --- Format guard ------------------------------------------------------------
+
+# Types outside the complete source allow-list fail locally, even for NULL or
+# zero-row inputs. No secret or remote field metadata is required to prove it.
+foreach source_type BLOB INTERVAL INTEGER[] VARCHAR[][] DECIMAL(10,2) TIMESTAMP_NS
+
+statement error
+COPY (SELECT NULL::${source_type} AS bad_column WHERE false) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
+----
+which cannot be written to Feishu
+
+endloop
+
+statement error
+COPY (SELECT {'x': 1} AS bad_column LIMIT 0) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
+----
+which cannot be written to Feishu
+
+statement error
+COPY (SELECT MAP(['x'], [1]) AS bad_column LIMIT 0) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
+----
+which cannot be written to Feishu
+
+# Duplicate detection is case-insensitive and cannot be bypassed by LIMIT 0.
+statement error
+COPY (SELECT 1 AS duplicate_name, 2 AS DUPLICATE_NAME LIMIT 0) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable);
+----
+duplicate source column
+
+foreach batch_limit 1 500
+
+statement error
+COPY (SELECT 1 AS id WHERE false) TO 'bascnXXXXXXXX'
+    (FORMAT feishu_bitable, BATCH_SIZE ${batch_limit});
+----
+COPY writeback requires a table_id
+
+endloop
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, view_id 'vewXXXX');
+----
+Unrecognized option
+
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, file_extension 'feishu_bitable');
+----
+file_extension
+
+# An explicit table_id supplies a URL's missing table; URL views are ignored.
+statement error
+COPY (SELECT 1 AS id) TO 'https://example.feishu.cn/base/bascnXXXXXXXX?view=vewXXXX'
+    (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
+----
+feishu_bitable: no TYPE feishu secret
+
+
+# A missing FORMAT must never be misread as this extension: DuckDB keeps owning
+# format inference and writes a local CSV instead of calling feishu_bitable.
+statement ok
+COPY (SELECT 1 AS id) TO '__TEST_DIR__/feishu_bitable_copy_format_guard.csv';
+
+# A near-miss format name is resolved by DuckDB's catalog, not by us.
+statement error
+COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable_typo);
+----
+does not exist

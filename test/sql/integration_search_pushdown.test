@@ -1,0 +1,327 @@
+# name: test/sql/integration_search_pushdown.test
+# description: live dual-path equivalence for records/search pushdown vs GET list
+# group: [sql]
+
+#              + local filter, VIEW_ID / unpushable fallback, and sole record_id GET
+
+# Skipped unless a real Feishu credential is exported:
+#   FEISHU_TEST_APP_ID                            Feishu self-built application ID
+#   FEISHU_TEST_APP_SECRET                        Feishu self-built application secret
+#   FEISHU_TEST_APP_TOKEN                         app_token of a base whose first table has
+#                                                 Text + Number columns (pagination fixture)
+#   FEISHU_TEST_URL                               browser URL of that same base
+#
+# Dual-path method: materialize a full GET list scan, then apply the same WHERE
+# locally (= list + DuckDB filter). Compare record_id sets against the same
+# WHERE pushed onto read_bitable (= POST records/search when eligible).
+# Fixture columns on the first table: "文本列" (Text), "序号列" (Number),
+# "all_types_table-关联列" (Link/JSON, deliberately unpushable).
+# Default Grid view_id of that first table (protected read fixture): vewJBOjTev.
+
+require-env FEISHU_TEST_APP_ID
+
+require-env FEISHU_TEST_APP_SECRET
+
+require-env FEISHU_TEST_APP_TOKEN
+
+require-env FEISHU_TEST_URL
+
+# Once all require-env gates pass, request errors must fail the test.
+# DuckDB v1.5.5 otherwise skips errors containing HTTP or Unable to connect.
+# An empty value clears the runner's skip-on-error list for this entire file.
+set ignore_error_messages
+
+require feishu_bitable
+
+statement ok
+CREATE SECRET integration_search_pushdown_feishu (
+    TYPE feishu,
+    APP_ID '${FEISHU_TEST_APP_ID}',
+    APP_SECRET '${FEISHU_TEST_APP_SECRET}'
+);
+
+# Local baseline: one full GET list materialization (no search pushdown).
+statement ok
+CREATE TABLE local_full AS
+SELECT record_id, "文本列", "序号列", "all_types_table-关联列"
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true);
+
+# Need enough rows for equality / comparison / AND slices below.
+query I
+SELECT count(*) >= 5 AND count(DISTINCT "文本列") >= 5 FROM local_full;
+----
+true
+
+# ==============================================================================
+# 1. Pushable predicates: search path ≡ local filter (dual-path)
+# ==============================================================================
+
+# Text equality
+query I
+SELECT (SELECT list(record_id ORDER BY record_id) FROM local_full WHERE "文本列" = 'Row 1')
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "文本列" = 'Row 1');
+----
+true
+
+# Numeric comparison (>)
+query I
+SELECT (SELECT list(record_id ORDER BY record_id) FROM local_full WHERE "序号列" > 498)
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "序号列" > 498);
+----
+true
+
+# Numeric comparison (<=)
+query I
+SELECT (SELECT list(record_id ORDER BY record_id) FROM local_full WHERE "序号列" <= 2)
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "序号列" <= 2);
+----
+true
+
+# Flat AND of pushable atoms
+query I
+SELECT (SELECT list(record_id ORDER BY record_id)
+        FROM local_full WHERE "文本列" = 'Row 2' AND "序号列" >= 2)
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "文本列" = 'Row 2' AND "序号列" >= 2);
+----
+true
+
+# Text inequality (isNot)
+query I
+SELECT (SELECT list(record_id ORDER BY record_id) FROM local_full WHERE "文本列" <> 'Row 1')
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "文本列" <> 'Row 1');
+----
+true
+
+# Pushdown slices are non-trivial (guards against an empty-vs-empty false green).
+query I
+SELECT (SELECT count(*) FROM local_full WHERE "文本列" = 'Row 1') = 1
+   AND (SELECT count(*) FROM local_full WHERE "序号列" > 498) >= 1
+   AND (SELECT count(*) FROM local_full WHERE "序号列" <= 2) = 2
+   AND (SELECT count(*) FROM local_full WHERE "文本列" = 'Row 2' AND "序号列" >= 2) = 1;
+----
+true
+
+# ==============================================================================
+# 2. Refuse search: VIEW_ID and unpushable predicates stay on GET list
+# ==============================================================================
+
+# VIEW_ID forces the list path (search would ignore the view). Same filter on the
+# view-scoped scan must match local filter over a view-scoped materialization.
+statement ok
+CREATE TABLE local_view AS
+SELECT record_id, "序号列"
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true, VIEW_ID = 'vewJBOjTev');
+
+query I
+SELECT (SELECT list(record_id ORDER BY record_id) FROM local_view WHERE "序号列" <= 5)
+     = (SELECT list(record_id ORDER BY record_id)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true,
+                          VIEW_ID = 'vewJBOjTev')
+        WHERE "序号列" <= 5);
+----
+true
+
+# Unpushable atom (JSON/Link IS NOT NULL) refuses flatten → GET list + local filter.
+query I
+SELECT (SELECT count(*) FROM local_full WHERE "all_types_table-关联列" IS NOT NULL)
+     = (SELECT count(*)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "all_types_table-关联列" IS NOT NULL);
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM local_full WHERE "all_types_table-关联列" IS NULL)
+     = (SELECT count(*)
+        FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+        WHERE "all_types_table-关联列" IS NULL);
+----
+true
+
+# ==============================================================================
+# 3. H-3: sole record_id = uses single-record GET and returns the row
+# ==============================================================================
+
+statement ok
+CREATE TABLE sample_rid AS
+SELECT record_id AS id, "文本列" AS text_val, "序号列" AS num_val
+FROM local_full
+ORDER BY "序号列"
+LIMIT 1;
+
+query I
+SELECT count(*) = 1 AND bool_and(id IS NOT NULL) FROM sample_rid;
+----
+true
+
+query I
+SELECT count(*) = 1
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+WHERE record_id = (SELECT id FROM sample_rid);
+----
+true
+
+query I
+SELECT "文本列" = (SELECT text_val FROM sample_rid)
+   AND "序号列" = (SELECT num_val FROM sample_rid)
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+WHERE record_id = (SELECT id FROM sample_rid);
+----
+true
+
+# Missing record_id yields an empty set (same as SQL filter over the list).
+query I
+SELECT count(*) = 0
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+WHERE record_id = 'recDOESNOTEXIST0000';
+----
+true
+
+# ==============================================================================
+# 4. I-2: ORDER BY pushdown for text/number, local fallback otherwise
+# ==============================================================================
+# Top-level ORDER BY (not an ordered aggregate) is what the optimizer rewrites.
+# CTAS keeps that order in rowid. local_full is a DuckDB table, so its ORDER BY
+# stays local. The read_bitable side is the pushed or fallback path.
+
+statement ok
+CREATE TABLE local_text_asc AS
+SELECT record_id FROM local_full ORDER BY "文本列" ASC;
+
+statement ok
+CREATE TABLE pushed_text_asc AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "文本列" ASC;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_text_asc)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_text_asc);
+----
+true
+
+statement ok
+CREATE TABLE local_text_desc AS
+SELECT record_id FROM local_full ORDER BY "文本列" DESC;
+
+statement ok
+CREATE TABLE pushed_text_desc AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "文本列" DESC;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_text_desc)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_text_desc);
+----
+true
+
+statement ok
+CREATE TABLE local_num_asc AS
+SELECT record_id FROM local_full ORDER BY "序号列" ASC;
+
+statement ok
+CREATE TABLE pushed_num_asc AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "序号列" ASC;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_num_asc)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_num_asc);
+----
+true
+
+statement ok
+CREATE TABLE local_num_desc AS
+SELECT record_id FROM local_full ORDER BY "序号列" DESC;
+
+statement ok
+CREATE TABLE pushed_num_desc AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "序号列" DESC;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_num_desc)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_num_desc);
+----
+true
+
+statement ok
+CREATE TABLE local_text_num AS
+SELECT record_id FROM local_full ORDER BY "文本列" ASC, "序号列" DESC;
+
+statement ok
+CREATE TABLE pushed_text_num AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "文本列" ASC, "序号列" DESC;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_text_num)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_text_num);
+----
+true
+
+# Expressions, explicit NULLS FIRST, and VIEW_ID all keep local ORDER BY.
+# record_id is a system column, so it is not a pushable sort key either.
+# The link column is JSON; ordering it requires the json extension, which this
+# runner does not load.
+statement ok
+CREATE TABLE local_record_ord AS
+SELECT record_id FROM local_full ORDER BY record_id;
+
+statement ok
+CREATE TABLE pushed_record_ord AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY record_id;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_record_ord)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_record_ord);
+----
+true
+
+statement ok
+CREATE TABLE local_text_nf AS
+SELECT record_id FROM local_full ORDER BY "文本列" ASC NULLS FIRST;
+
+statement ok
+CREATE TABLE pushed_text_nf AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true)
+ORDER BY "文本列" ASC NULLS FIRST;
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_text_nf)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_text_nf);
+----
+true
+
+statement ok
+CREATE TABLE local_view_num AS
+SELECT record_id FROM local_view ORDER BY "序号列";
+
+statement ok
+CREATE TABLE pushed_view_num AS
+SELECT record_id
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true, VIEW_ID = 'vewJBOjTev')
+ORDER BY "序号列";
+
+query I
+SELECT (SELECT list(record_id ORDER BY rowid) FROM local_view_num)
+     = (SELECT list(record_id ORDER BY rowid) FROM pushed_view_num);
+----
+true

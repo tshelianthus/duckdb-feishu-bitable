@@ -1,0 +1,130 @@
+# name: test/sql/scan_pushdown.test
+# description: projection pushdown and LIMIT early termination contract (offline)
+# group: [sql]
+
+require feishu_bitable
+
+# Pushdown has two halves. The part that is observable without a network is the
+# bind contract asserted here: every scan entry point advertises the pushdown
+# relevant options, and neither a projection nor a LIMIT is allowed to skip
+# argument validation or credential resolution. The part that needs a live base
+# (which fields land in `field_names`, and that `LIMIT N` stops paging) runs in
+# test/sql/integration_pushdown.test behind require-env.
+
+# ==============================================================================
+# 1. Optimization relevant arguments are part of the SQL contract
+# ==============================================================================
+
+# Positional args stay colN on table functions (DuckDB named-parameter fallback);
+# named parameters must keep their real names.
+query I rowsort
+SELECT unnest(parameters)
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable_scan';
+----
+col0
+col1
+include_system_columns
+page_size
+schema_mode
+secret
+view_id
+
+query I rowsort
+SELECT DISTINCT unnest(parameters)
+FROM duckdb_functions()
+WHERE function_name = 'read_feishu_bitable';
+----
+col0
+col1
+include_system_columns
+page_size
+schema_mode
+secret
+table_id
+view_id
+
+query I rowsort
+SELECT DISTINCT unnest(parameters)
+FROM duckdb_functions()
+WHERE function_name = 'read_bitable';
+----
+col0
+col1
+include_system_columns
+page_size
+schema_mode
+secret
+table_id
+view_id
+
+# ==============================================================================
+# 2. LIMIT never bypasses bind
+# ==============================================================================
+
+# The optimizer can eliminate LIMIT 0 before initializing a table function.
+# Invalid options must nevertheless be rejected during bind.
+statement error
+SELECT * FROM feishu_bitable_scan(
+    'app_token', 'table_id', PAGE_SIZE = -1
+) LIMIT 0;
+----
+Invalid Input Error: feishu_bitable_scan page_size must be between 1 and 500
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', SCHEMA_MODE = 'unsupported_mode') LIMIT 0;
+----
+Invalid Input Error: read_feishu_bitable schema_mode must be 'typed' or 'json'
+
+# A LIMIT that survives the optimizer still binds first, so credential
+# resolution reports before a single record page could be requested.
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', 'tbl789012') LIMIT 5;
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM feishu_bitable_scan(
+    'bascn123456', 'tbl789012', SECRET = '__pushdown_missing_secret__', PAGE_SIZE = 1
+) LIMIT 1;
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# ==============================================================================
+# 3. Projection never bypasses bind
+# ==============================================================================
+
+# Naming columns, aggregating without reading any column, and asking for the
+# system columns all take the same bind path.
+statement error
+SELECT some_field FROM read_feishu_bitable('bascn123456', 'tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT count(*) FROM read_feishu_bitable('bascn123456', 'tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+# A constant-only projection is the SQL shape that produces zero requested
+# source columns. It must still bind and resolve credentials, rather than
+# silently turning into an unvalidated full scan.
+statement error
+SELECT 1 FROM read_feishu_bitable('bascn123456', 'tbl789012') LIMIT 1;
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT record_id FROM read_bitable('bascn123456', 'tbl789012', INCLUDE_SYSTEM_COLUMNS = true) LIMIT 3;
+----
+Invalid Input Error: No feishu secret is available
+
+# The projected and paginated combination of every optimization argument stays
+# a bind time decision as well.
+statement error
+SELECT count(*) FROM read_feishu_bitable(
+    'https://sample.feishu.cn/base/bascn123456?table=tbl789012',
+    SCHEMA_MODE = 'json', PAGE_SIZE = 1, INCLUDE_SYSTEM_COLUMNS = true
+) LIMIT 2;
+----
+Invalid Input Error: No feishu secret is available

@@ -1,0 +1,253 @@
+# name: test/sql/integration_copy_writeback.test
+# description: protected write-side round trip, batch boundaries and failure semantics
+# group: [sql]
+
+#
+# Skipped unless the DEDICATED write-test credentials are exported:
+#   FEISHU_WRITE_TEST_APP_TOKEN              app_token of the WRITE-ONLY base
+#   FEISHU_WRITE_TEST_TABLE_ID               table_id inside that base
+#   FEISHU_WRITE_TEST_APP_ID                 app that owns the write Base
+#   FEISHU_WRITE_TEST_APP_SECRET             secret of that app (tenant identity)
+#   FEISHU_WRITE_TEST_PREFIX                 unique marker prefix for this suite
+#
+# Never point these at the read regression Base (.specs/04_TESTING_SPEC.md
+# section 6 is explicit about the isolation requirement).
+#
+# Preconditions established by E-5.2 (human) / I-5: the write Base carries at
+# least a text field named `name`, a number field named `amount`, a
+# single-select field named `status` with the option `ready`, a formula field
+# `formula_column`, a USER field `person`, and a LINK field `link` (same-table);
+# every run starts from a clean table and removes the rows it created.
+# I-5 open_id round-trip also needs FEISHU_WRITE_TEST_OPEN_ID (bot open_id).
+
+require-env FEISHU_WRITE_TEST_APP_TOKEN
+
+require-env FEISHU_WRITE_TEST_TABLE_ID
+
+require-env FEISHU_WRITE_TEST_APP_ID
+
+require-env FEISHU_WRITE_TEST_APP_SECRET
+
+require-env FEISHU_WRITE_TEST_PREFIX
+
+# Once the gates pass, request failures must fail the file instead of being
+# silently skipped by the runner's HTTP error filter.
+set ignore_error_messages
+
+require feishu_bitable
+
+statement ok
+CREATE SECRET integration_write_feishu (
+    TYPE feishu,
+    APP_ID '${FEISHU_WRITE_TEST_APP_ID}',
+    APP_SECRET '${FEISHU_WRITE_TEST_APP_SECRET}'
+);
+
+# --- Batches ---------------------------------------------------------------
+
+# A zero-row COPY never issues a remote write; DuckDB reports Count = 0.
+query I
+COPY (SELECT 'n' AS name, 1 AS amount FROM range(0)) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+0
+
+# batch_size - 1 rows: a single short batch flushed by finalize.
+query I
+COPY (SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'row' || i AS name, i AS amount FROM range(0, 99) AS r(i)) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+99
+
+# Exactly batch_size rows: one full batch, no tail.
+query I
+COPY (SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'row' || i AS name, i AS amount FROM range(0, 100) AS r(i)) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+100
+
+# batch_size + 1 rows: one full batch plus a one-row tail.
+query I
+COPY (SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'row' || i AS name, i AS amount FROM range(0, 101) AS r(i)) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+101
+
+# --- Write-then-read-back ---------------------------------------------------
+
+query I
+SELECT count(*) FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+);
+----
+300
+
+query I
+SELECT count(*) = 300
+       AND min(amount) = 0
+       AND max(amount) = 100
+       AND sum(amount) = 14851
+       AND count(DISTINCT name) = 101
+FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+) WHERE name LIKE '${FEISHU_WRITE_TEST_PREFIX}row%';
+----
+true
+
+# A zero-row COPY after successful writes must not change the remote baseline.
+query I
+COPY (SELECT 'unused' AS name, 0 AS amount FROM range(0)) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+0
+
+query I
+SELECT count(*) FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+) WHERE name LIKE '${FEISHU_WRITE_TEST_PREFIX}row%';
+----
+300
+
+# --- Remote whole-batch failure --------------------------------------------
+
+# Feishu SingleSelect via OpenAPI auto-creates unknown option names, so an
+# "invalid" status label is NOT a reliable remote rejection. Oversized text
+# cells return code 1254130 TooLargeCell and keep the batch atomic.
+statement error
+COPY (SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'invalid-' || repeat('x', 100000) AS name,
+             1 AS amount)
+TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+<REGEX>:.*batch #1.*rows 1-1.*failed.*0 confirmed batches / 0 rows.*
+
+query I
+SELECT count(*) FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+);
+----
+300
+
+# --- Cross-batch partial completion ----------------------------------------
+
+# The first 100 rows are valid; the second batch uses oversized text cells.
+# There is no cross-batch transaction, so the first batch must remain remotely
+# visible after COPY fails.
+statement error
+COPY (
+    SELECT CASE
+               WHEN i < 100 THEN '${FEISHU_WRITE_TEST_PREFIX}' || 'partial-' || i
+               ELSE '${FEISHU_WRITE_TEST_PREFIX}' || 'partial-big-' || i || repeat('x', 100000)
+           END AS name,
+           i AS amount
+    FROM range(0, 200) AS r(i)
+) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    batch_size 100
+);
+----
+<REGEX>:.*batch #2.*rows 101-200.*failed.*1 confirmed batches / 100 rows.*
+
+query I
+SELECT count(*) FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+) WHERE name LIKE '${FEISHU_WRITE_TEST_PREFIX}partial-%';
+----
+100
+
+# --- Read-only field and unknown columns are refused at bind -----------------
+
+statement error
+COPY (SELECT 'x' AS name, 1 AS amount, 'v' AS formula_column) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}'
+);
+----
+maps to read-only Feishu field
+
+statement error
+COPY (SELECT 'x' AS not_a_field) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}'
+);
+----
+no field named
+
+# --- I-5: LINK / USER write round-trip (open_id only) -----------------------
+
+require-env FEISHU_WRITE_TEST_OPEN_ID
+
+# Probe row whose record_id becomes the legal link target.
+query I
+COPY (SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'i5-probe' AS name, 1 AS amount) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}'
+);
+----
+1
+
+statement ok
+CREATE TEMP TABLE i5_probe AS
+SELECT record_id
+FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}',
+    INCLUDE_SYSTEM_COLUMNS => true
+)
+WHERE name = '${FEISHU_WRITE_TEST_PREFIX}' || 'i5-probe';
+
+query I
+SELECT count(*) = 1 AND min(record_id) IS NOT NULL FROM i5_probe;
+----
+true
+
+# Write one row with a legal open_id and a legal same-table link record_id.
+query I
+COPY (
+    SELECT '${FEISHU_WRITE_TEST_PREFIX}' || 'i5-roundtrip' AS name,
+           1 AS amount,
+           ['${FEISHU_WRITE_TEST_OPEN_ID}'] AS person,
+           list_value(record_id) AS link
+    FROM i5_probe
+) TO '${FEISHU_WRITE_TEST_APP_TOKEN}' (
+    FORMAT feishu_bitable,
+    table_id '${FEISHU_WRITE_TEST_TABLE_ID}',
+    user_id_type 'open_id'
+);
+----
+1
+
+query I
+SELECT contains(CAST(person AS VARCHAR), '${FEISHU_WRITE_TEST_OPEN_ID}')
+       AND contains(CAST(link AS VARCHAR), (SELECT record_id FROM i5_probe))
+FROM read_feishu_bitable(
+    '${FEISHU_WRITE_TEST_APP_TOKEN}',
+    table_id => '${FEISHU_WRITE_TEST_TABLE_ID}'
+)
+WHERE name = '${FEISHU_WRITE_TEST_PREFIX}' || 'i5-roundtrip';
+----
+true

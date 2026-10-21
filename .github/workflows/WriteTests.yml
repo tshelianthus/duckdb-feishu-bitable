@@ -1,0 +1,134 @@
+#
+# Protected, real-API write-side SQLLogicTests.
+#
+# These tests WRITE to a dedicated Feishu Base, so they run only when a
+# maintainer triggers them explicitly (workflow_dispatch) and the protected
+# `write-tests` environment supplies the credentials. The main pipeline never
+# calls this workflow and never receives write credentials (AGENTS.md section 4).
+#
+name: Write SQL Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      FEISHU_WRITE_TEST_APP_TOKEN:
+        required: false
+      FEISHU_WRITE_TEST_TABLE_ID:
+        required: false
+      FEISHU_WRITE_TEST_APP_ID:
+        required: false
+      FEISHU_WRITE_TEST_APP_SECRET:
+        required: false
+      # Bot/user open_id used as USER-field fixture data (I-5). Not an auth
+      # credential, but kept as an environment secret so Actions redacts it in
+      # logs and the same write-tests access boundary applies.
+      FEISHU_WRITE_TEST_OPEN_ID:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: write-sql-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  credentials:
+    name: Check write-test credentials
+    runs-on: ubuntu-latest
+    environment: write-tests
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        name: Check optional write secret set
+        env:
+          FEISHU_WRITE_TEST_APP_TOKEN: ${{ secrets.FEISHU_WRITE_TEST_APP_TOKEN }}
+          FEISHU_WRITE_TEST_TABLE_ID: ${{ secrets.FEISHU_WRITE_TEST_TABLE_ID }}
+          FEISHU_WRITE_TEST_APP_ID: ${{ secrets.FEISHU_WRITE_TEST_APP_ID }}
+          FEISHU_WRITE_TEST_APP_SECRET: ${{ secrets.FEISHU_WRITE_TEST_APP_SECRET }}
+          FEISHU_WRITE_TEST_OPEN_ID: ${{ secrets.FEISHU_WRITE_TEST_OPEN_ID }}
+        shell: bash
+        run: |
+          missing=0
+          for name in FEISHU_WRITE_TEST_APP_TOKEN FEISHU_WRITE_TEST_TABLE_ID FEISHU_WRITE_TEST_APP_ID FEISHU_WRITE_TEST_APP_SECRET FEISHU_WRITE_TEST_OPEN_ID; do
+            if [ -z "${!name}" ]; then
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "::warning::Feishu writeback tests skipped: protected write-test secrets are not configured."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  write-tests:
+    name: Run writeback SQLLogicTests
+    needs: credentials
+    if: needs.credentials.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    environment: write-tests
+    steps:
+      # ubuntu-latest + recursive DuckDB checkout + debug build OOMs the ~14GB
+      # root disk (run 37003064406: "No space left on device"). Same cleanup
+      # pattern as duckdb/.github/actions/cleanup_runner and extension-ci-tools.
+      - name: Free disk space
+        uses: endersonmenezes/free-disk-space@v3
+        continue-on-error: true
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_folders: /opt/az /opt/ghc /opt/google /opt/hostedtoolcache /opt/microsoft /usr/lib/firefox /usr/lib/jvm /usr/local/.ghcup /usr/local/julia* /usr/local/lib/android /usr/local/share/boost /usr/local/share/chromium /usr/local/share/powershell /usr/share/dotnet /usr/share/swift /var/lib/apt/lists/*
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Remove stale write-test records
+        env:
+          FEISHU_WRITE_TEST_APP_TOKEN: ${{ secrets.FEISHU_WRITE_TEST_APP_TOKEN }}
+          FEISHU_WRITE_TEST_TABLE_ID: ${{ secrets.FEISHU_WRITE_TEST_TABLE_ID }}
+          FEISHU_WRITE_TEST_APP_ID: ${{ secrets.FEISHU_WRITE_TEST_APP_ID }}
+          FEISHU_WRITE_TEST_APP_SECRET: ${{ secrets.FEISHU_WRITE_TEST_APP_SECRET }}
+          FEISHU_WRITE_TEST_PREFIX: e5-ci-
+        run: scripts/cleanup_write_test_records.sh
+
+      # Run 37097316391 died here: Unix Makefiles + BUILD_WORKERS=4 linked
+      # libduckdb.so, unittest, and duckdb at once; CMake JOB_POOLS only
+      # apply with Ninja. DuckDB/extension-ci-tools Linux jobs use GEN=ninja
+      # and apt ninja-build (see duckdb/.github/workflows/Main.yml).
+      # DUCKDB_DEBUG_LINK_JOBS=1 serializes those three Debug links so the
+      # runner is not SIGTERM'd (exit 143) at 99%–100% again.
+      - name: Install ninja
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
+      - name: Build debug extension
+        env:
+          GEN: ninja
+          BUILD_WORKERS: "2"
+          EXT_DEBUG_FLAGS: -DDUCKDB_DEBUG_LINK_JOBS=1
+        run: make debug
+
+      - name: Run protected writeback tests
+        env:
+          FEISHU_WRITE_TEST_APP_TOKEN: ${{ secrets.FEISHU_WRITE_TEST_APP_TOKEN }}
+          FEISHU_WRITE_TEST_TABLE_ID: ${{ secrets.FEISHU_WRITE_TEST_TABLE_ID }}
+          FEISHU_WRITE_TEST_APP_ID: ${{ secrets.FEISHU_WRITE_TEST_APP_ID }}
+          FEISHU_WRITE_TEST_APP_SECRET: ${{ secrets.FEISHU_WRITE_TEST_APP_SECRET }}
+          FEISHU_WRITE_TEST_OPEN_ID: ${{ secrets.FEISHU_WRITE_TEST_OPEN_ID }}
+          FEISHU_WRITE_TEST_PREFIX: e5-ci-
+        run: make test_sql_write_debug
+
+      - name: Remove write-test records
+        if: always()
+        env:
+          FEISHU_WRITE_TEST_APP_TOKEN: ${{ secrets.FEISHU_WRITE_TEST_APP_TOKEN }}
+          FEISHU_WRITE_TEST_TABLE_ID: ${{ secrets.FEISHU_WRITE_TEST_TABLE_ID }}
+          FEISHU_WRITE_TEST_APP_ID: ${{ secrets.FEISHU_WRITE_TEST_APP_ID }}
+          FEISHU_WRITE_TEST_APP_SECRET: ${{ secrets.FEISHU_WRITE_TEST_APP_SECRET }}
+          FEISHU_WRITE_TEST_PREFIX: e5-ci-
+        run: scripts/cleanup_write_test_records.sh

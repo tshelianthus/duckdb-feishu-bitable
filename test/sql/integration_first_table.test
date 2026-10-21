@@ -1,0 +1,57 @@
+# name: test/sql/integration_first_table.test
+# description: live end to end check of URL input and the first table fallback
+# group: [sql]
+
+# Skipped unless a real Feishu credential is exported:
+#   FEISHU_TEST_APP_ID                            Feishu self-built application ID
+#   FEISHU_TEST_APP_SECRET                        Feishu self-built application secret
+#   FEISHU_TEST_APP_TOKEN                         app_token of a base with at least one table
+#   FEISHU_TEST_URL                               browser URL of that same base
+
+require-env FEISHU_TEST_APP_ID
+
+require-env FEISHU_TEST_APP_SECRET
+
+require-env FEISHU_TEST_APP_TOKEN
+
+require-env FEISHU_TEST_URL
+
+# Once all require-env gates pass, request errors must fail the test.
+# DuckDB v1.5.5 otherwise skips errors containing HTTP or Unable to connect.
+# An empty value clears the runner's skip-on-error list for this entire file.
+set ignore_error_messages
+
+require feishu_bitable
+
+statement ok
+CREATE SECRET integration_feishu (
+    TYPE feishu,
+    APP_ID '${FEISHU_TEST_APP_ID}',
+    APP_SECRET '${FEISHU_TEST_APP_SECRET}'
+);
+
+# A bare app_token binds against the first table of the base.
+statement ok
+CREATE TABLE token_fallback AS SELECT * FROM read_feishu_bitable('${FEISHU_TEST_APP_TOKEN}');
+
+# A base URL without a table query parameter resolves to that same table.
+statement ok
+CREATE TABLE url_fallback AS SELECT * FROM read_bitable('${FEISHU_TEST_URL}');
+
+query I
+SELECT (SELECT count(*) FROM token_fallback) = (SELECT count(*) FROM url_fallback);
+----
+true
+
+# The replacement scan is equivalent to calling the table function explicitly.
+query I
+SELECT (SELECT count(*) FROM '${FEISHU_TEST_URL}') = (SELECT count(*) FROM url_fallback);
+----
+true
+
+# The alias returns the same result as the primary function.
+query I
+SELECT (SELECT count(*) FROM read_bitable('${FEISHU_TEST_APP_TOKEN}'))
+     = (SELECT count(*) FROM read_feishu_bitable('${FEISHU_TEST_APP_TOKEN}'));
+----
+true

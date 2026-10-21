@@ -1,0 +1,11 @@
+# name: test/sql/types_and_security.test
+# description: credential masking is covered by the standalone unit tests
+# group: [sql]
+
+require feishu_bitable
+
+# Field type names and the Feishu -> DuckDB type mapping table of
+# .specs/03_API_CONTRACT.md section 4.4 are pure logic and are asserted in
+# test/unit/bitable/test_field_type.cpp; record value coercion (including the
+# composite fields and SCHEMA_MODE 'json') lives in
+# test/unit/bitable/test_value_coercion.cpp. Neither is exposed as a SQL helper.

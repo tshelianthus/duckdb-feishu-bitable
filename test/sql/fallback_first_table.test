@@ -1,0 +1,76 @@
+# name: test/sql/fallback_first_table.test
+# description: default first table fallback when no table is named
+# group: [sql]
+
+require feishu_bitable
+
+# The fallback has two halves. Resolving tables[0] out of a
+# GET /apps/{app_token}/tables payload — including the empty base error — is
+# asserted in test/unit/bitable/test_api_response.cpp. The live round trip runs
+# in test/sql/integration_first_table.test when Feishu credentials are exported.
+# This file covers the bind contract: not naming a table is accepted and carries
+# on to credential resolution instead of demanding a table_id.
+
+# URL without table: bind proceeds past argument validation into secret lookup.
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/bascn123456');
+----
+Invalid Input Error: No feishu secret is available
+
+# Bare app_token without table: same fallback path.
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_bitable('bascn123456');
+----
+Invalid Input Error: No feishu secret is available
+
+# Secret resolution still precedes every network operation.
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', SECRET = '__fallback_missing_secret__');
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# Naming a table skips the fallback but takes the same bind path.
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/bascn123456?table=tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', 'tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', table_id := 'tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/bascn123456', table_id := '');
+----
+Invalid Input Error: read_feishu_bitable table_id must not be empty
+
+statement error
+SELECT * FROM read_feishu_bitable(NULL);
+----
+Invalid Input Error: read_feishu_bitable requires a non-NULL url or app_token
+
+statement error
+SELECT * FROM read_feishu_bitable('');
+----
+Invalid Input Error: read_feishu_bitable requires a non-empty url or app_token
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', NULL);
+----
+Invalid Input Error: read_feishu_bitable requires a non-NULL table_id
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', '');
+----
+Invalid Input Error: read_feishu_bitable requires a non-empty table_id

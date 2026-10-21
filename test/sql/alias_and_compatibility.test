@@ -1,0 +1,113 @@
+# name: test/sql/alias_and_compatibility.test
+# description: read_bitable alias and feishu_bitable_scan backwards compatibility
+# group: [sql]
+
+require feishu_bitable
+
+# Both modern entry points expose the single argument (URL or app_token) and the
+# two argument (app_token, table_id) overloads.
+query II
+SELECT function_name, count(*)
+FROM duckdb_functions()
+WHERE function_name IN ('read_feishu_bitable', 'read_bitable') AND function_type = 'table'
+GROUP BY function_name
+ORDER BY function_name;
+----
+read_bitable	2
+read_feishu_bitable	2
+
+# The alias carries exactly the same named parameters as the primary function.
+query I
+SELECT count(*) = 0 FROM (
+    SELECT unnest(parameters) AS parameter
+    FROM duckdb_functions()
+    WHERE function_name = 'read_feishu_bitable'
+    EXCEPT
+    SELECT unnest(parameters) AS parameter
+    FROM duckdb_functions()
+    WHERE function_name = 'read_bitable'
+);
+----
+true
+
+query I rowsort
+SELECT DISTINCT unnest(parameters)
+FROM duckdb_functions()
+WHERE function_name = 'read_bitable';
+----
+col0
+col1
+include_system_columns
+page_size
+schema_mode
+secret
+table_id
+view_id
+
+# read_bitable behaves identically to read_feishu_bitable, down to validation.
+statement error
+SELECT * FROM read_bitable('bascn123456', SCHEMA_MODE = 'unsupported_mode');
+----
+Invalid Input Error: read_bitable schema_mode must be 'typed' or 'json'
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', SCHEMA_MODE = 'unsupported_mode');
+----
+Invalid Input Error: read_feishu_bitable schema_mode must be 'typed' or 'json'
+
+statement error
+SELECT * FROM read_bitable('bascn123456', PAGE_SIZE = 501);
+----
+Invalid Input Error: read_bitable page_size must be between 1 and 500
+
+statement error
+SELECT * FROM read_bitable('bascn123456', 'tbl789012', SECRET = '__alias_missing_secret__');
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+statement error
+SELECT * FROM read_feishu_bitable('bascn123456', 'tbl789012', SECRET = '__alias_missing_secret__');
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# The classic function keeps its exact signature: two required arguments, no URL
+# parsing, no first table fallback, and no `table` named parameter.
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable_scan' AND function_type = 'table';
+----
+1
+
+statement error
+SELECT * FROM feishu_bitable_scan('bascn123456');
+----
+Binder Error: No function matches the given name and argument types 'feishu_bitable_scan(VARCHAR)'
+
+statement error
+SELECT * FROM feishu_bitable_scan('bascn123456', 'tbl789012', table_id := 'tblOther');
+----
+Binder Error: Invalid named parameter "table_id" for function feishu_bitable_scan
+
+statement error
+SELECT * FROM feishu_bitable_scan(NULL, 'tbl789012');
+----
+Invalid Input Error: feishu_bitable_scan requires non-NULL app_token and table_id
+
+statement error
+SELECT * FROM feishu_bitable_scan('', 'tbl789012');
+----
+Invalid Input Error: feishu_bitable_scan requires non-empty app_token and table_id
+
+statement error
+SELECT * FROM feishu_bitable_scan('bascn123456', 'tbl789012', SECRET = '__classic_missing_secret__');
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# A URL passed to the classic function stays a literal app_token: no rewrite.
+statement error
+SELECT * FROM feishu_bitable_scan(
+    'https://sample.feishu.cn/base/bascn123456', 'tbl789012', SECRET = '__classic_missing_secret__'
+);
+----
+Invalid Input Error: Feishu secret with the requested name does not exist

@@ -1,0 +1,148 @@
+# name: test/sql/integration_pushdown.test
+# description: live end to end check of projection pushdown, LIMIT early stop,
+# group: [sql]
+
+#              the system columns and SCHEMA_MODE 'json'
+
+# Skipped unless a real Feishu credential is exported:
+#   FEISHU_TEST_APP_ID                            Feishu self-built application ID
+#   FEISHU_TEST_APP_SECRET                        Feishu self-built application secret
+#   FEISHU_TEST_APP_TOKEN                         app_token of a base whose first table has rows
+#   FEISHU_TEST_URL                               browser URL of that same base
+
+require-env FEISHU_TEST_APP_ID
+
+require-env FEISHU_TEST_APP_SECRET
+
+require-env FEISHU_TEST_APP_TOKEN
+
+require-env FEISHU_TEST_URL
+
+# Once all require-env gates pass, request errors must fail the test.
+# DuckDB v1.5.5 otherwise skips errors containing HTTP or Unable to connect.
+# An empty value clears the runner's skip-on-error list for this entire file.
+set ignore_error_messages
+
+require feishu_bitable
+
+statement ok
+CREATE SECRET integration_pushdown_feishu (
+    TYPE feishu,
+    APP_ID '${FEISHU_TEST_APP_ID}',
+    APP_SECRET '${FEISHU_TEST_APP_SECRET}'
+);
+
+statement ok
+CREATE TABLE full_scan AS SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}');
+
+# Empty fixtures cannot exercise record conversion, projection or pagination.
+# Require enough rows for the PAGE_SIZE = 1 / LIMIT 3 and PAGE_SIZE = 2 / LIMIT 6
+# checks below (both are bounded; neither may full-scan with PAGE_SIZE = 1).
+query I
+SELECT count(*) > 3 FROM full_scan;
+----
+true
+
+# ==============================================================================
+# 1. Projection pushdown never changes which records come back
+# ==============================================================================
+
+# COUNT(*) reads no column at all, so the scan asks Feishu for the smallest
+# possible projection. `field_names` must stay a pure column filter: the row
+# count has to match the unprojected scan exactly.
+query I
+SELECT (SELECT count(*) FROM read_bitable('${FEISHU_TEST_APP_TOKEN}')) = (SELECT count(*) FROM full_scan);
+----
+true
+
+# Reading only the system columns takes the same minimal projection path, and
+# every record still carries a distinct, non-NULL record_id.
+query I
+SELECT count(record_id) = (SELECT count(*) FROM full_scan)
+   AND count(DISTINCT record_id) = (SELECT count(*) FROM full_scan)
+FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true);
+----
+true
+
+# The three system columns are appended after the real fields, never in place
+# of them.
+statement ok
+CREATE TABLE system_scan AS
+SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', INCLUDE_SYSTEM_COLUMNS = true) LIMIT 0;
+
+query I
+SELECT count(*) = (SELECT count(*) FROM duckdb_columns() WHERE table_name = 'full_scan') + 3
+FROM duckdb_columns() WHERE table_name = 'system_scan';
+----
+true
+
+query II
+SELECT column_name, data_type
+FROM duckdb_columns()
+WHERE table_name = 'system_scan'
+  AND column_name IN ('record_id', 'created_time', 'updated_time')
+ORDER BY column_index;
+----
+record_id	VARCHAR
+created_time	TIMESTAMP
+updated_time	TIMESTAMP
+
+# ==============================================================================
+# 2. LIMIT stops the pagination early
+# ==============================================================================
+
+query I
+SELECT count(*) = least(5, (SELECT count(*) FROM full_scan))
+FROM (SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}') LIMIT 5);
+----
+true
+
+# One record per page: the executor stops asking for pages as soon as the LIMIT
+# is satisfied, and the truncated result is still exact.
+query I
+SELECT count(*) = least(3, (SELECT count(*) FROM full_scan))
+FROM (SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', PAGE_SIZE = 1) LIMIT 3);
+----
+true
+
+query I
+SELECT count(*) = 0 FROM (SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}') LIMIT 0);
+----
+true
+
+# Cross at least one page boundary with a small page size, but bound the request
+# count with LIMIT. A PAGE_SIZE = 1 full-table scan is O(row_count) serial API
+# round-trips (~0.8s each on live Bitable) and must not live in this suite.
+query I
+SELECT count(*) = least(6, (SELECT count(*) FROM full_scan))
+FROM (SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', PAGE_SIZE = 2) LIMIT 6);
+----
+true
+
+# ==============================================================================
+# 3. SCHEMA_MODE 'json' keeps every column as raw JSON
+# ==============================================================================
+
+statement ok
+CREATE TABLE json_scan AS SELECT * FROM read_bitable('${FEISHU_TEST_APP_TOKEN}', SCHEMA_MODE = 'json');
+
+query I
+SELECT count(*) = 0 FROM duckdb_columns() WHERE table_name = 'json_scan' AND data_type <> 'JSON';
+----
+true
+
+# The same columns in the same order, and the same records as the typed scan:
+# JSON mode only changes how a value is rendered.
+query I
+SELECT list(column_name ORDER BY column_index) = (
+    SELECT list(column_name ORDER BY column_index)
+    FROM duckdb_columns() WHERE table_name = 'full_scan'
+)
+FROM duckdb_columns() WHERE table_name = 'json_scan';
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM json_scan) = (SELECT count(*) FROM full_scan);
+----
+true

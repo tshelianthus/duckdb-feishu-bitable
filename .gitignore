@@ -1,0 +1,42 @@
+# 构建产物与临时目录
+build/
+build_release/
+build_debug/
+cmake-build-*/
+.build/
+duckdb_unittest_tempdir/
+testext
+
+# IDE 与环境配置
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+.Rhistory
+.cache/
+.cursor/
+.trae/
+uploads/
+
+# 测试与凭据隔离
+test/fixtures/secrets.json
+test/python/__pycache__/
+*.parquet
+*.duckdb
+*.duckdb.tmp
+.env*
+*.env
+
+# Agent 运行时临时目录
+.reasonix/
+
+# 本地文档
+/docs/
+/todolist.md
+/.product-dev/
+
+# 误建的空嵌套目录
+/duckdb-feishu-bitable/
+# Snapshot prototype local caches
+scripts/__pycache__/

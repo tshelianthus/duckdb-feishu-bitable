@@ -1,0 +1,90 @@
+# name: test/sql/feishu_bitable.test
+# description: smoke test for feishu_bitable extension load and catalog metadata
+# group: [sql]
+
+# Require statement will ensure this test is run with this extension loaded
+require feishu_bitable
+
+# Confirm the extension loads and public table functions are registered.
+query I
+SELECT DISTINCT function_name
+FROM duckdb_functions()
+WHERE function_name IN (
+    'feishu_bitable_tables',
+    'feishu_bitable_fields',
+    'feishu_bitable_scan',
+    'read_feishu_bitable',
+    'read_bitable'
+)
+ORDER BY function_name;
+----
+feishu_bitable_fields
+feishu_bitable_scan
+feishu_bitable_tables
+read_bitable
+read_feishu_bitable
+
+# Community pages / agents read description/examples/categories from C++ registration
+# metadata. Every public overload must expose a non-empty description and at least
+# one example. Table-function positionals remain colN under DuckDB 1.5.x (named
+# params keep real names); the scalar must not use colN.
+query III
+SELECT function_name, count(*) AS overload_count,
+       bool_and(description IS NOT NULL AND length(description) > 0
+                AND len(examples) > 0) AS has_docs
+FROM duckdb_functions()
+WHERE function_name IN (
+    'feishu_bitable_tables',
+    'feishu_bitable_fields',
+    'feishu_bitable_scan',
+    'read_feishu_bitable',
+    'read_bitable'
+)
+GROUP BY function_name
+ORDER BY function_name;
+----
+feishu_bitable_fields	1	true
+feishu_bitable_scan	1	true
+feishu_bitable_tables	1	true
+read_bitable	2	true
+read_feishu_bitable	2	true
+
+query I
+SELECT bool_and(list_contains(categories, 'feishu') AND list_contains(categories, 'bitable'))
+FROM duckdb_functions()
+WHERE function_name IN (
+    'feishu_bitable_tables',
+    'feishu_bitable_fields',
+    'feishu_bitable_scan',
+    'read_feishu_bitable',
+    'read_bitable'
+);
+----
+true
+
+# Keep the load-smoke scalar, but label it as an internal test helper via description.
+query II
+SELECT function_name, description
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable' AND function_type = 'scalar';
+----
+feishu_bitable	Internal load-smoke helper for extension tests; not part of the public API.
+
+query I
+SELECT unnest(parameters)
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable' AND function_type = 'scalar';
+----
+name
+
+query I
+SELECT unnest(categories)
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable' AND function_type = 'scalar';
+----
+internal
+
+query I
+SELECT feishu_bitable('world');
+----
+feishu_bitable ready: world

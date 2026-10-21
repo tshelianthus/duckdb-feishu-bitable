@@ -1,0 +1,72 @@
+# name: test/sql/replacement_scan.test
+# description: FROM 'https://...feishu.cn/base/...' replacement scan
+# group: [sql]
+
+# The interception predicate itself is asserted in
+# test/unit/bitable/test_url_parser.cpp (IsBitableUrl).
+
+require feishu_bitable
+
+# A Bitable URL in FROM is rewritten into read_feishu_bitable: bind runs and
+# stops at credential resolution instead of the catalog lookup that an
+# unintercepted string table name would produce.
+statement error
+SELECT * FROM 'https://sample.feishu.cn/base/bascn123456?table=tbl789012&view=vew345678';
+----
+Invalid Input Error: No feishu secret is available
+
+# Interception inherits the default first table fallback.
+statement error
+SELECT * FROM 'https://sample.feishu.cn/base/bascn123456';
+----
+Invalid Input Error: No feishu secret is available
+
+# Lark international domain.
+statement error
+SELECT * FROM 'https://sample.larksuite.com/base/bascn123456?table=tbl789012';
+----
+Invalid Input Error: No feishu secret is available
+
+# Wiki mount path.
+statement error
+SELECT * FROM 'https://sample.feishu.cn/wiki/wikcn987654?table=tbl789012';
+----
+Invalid Input Error: No feishu secret is available
+
+# The rewrite is equivalent to calling the table function explicitly.
+statement error
+SELECT * FROM read_feishu_bitable('https://sample.feishu.cn/base/bascn123456?table=tbl789012');
+----
+Invalid Input Error: No feishu secret is available
+
+# Fallthrough: a plain table name is left to the catalog.
+statement error
+SELECT * FROM 'no_such_bitable_table';
+----
+Catalog Error: Table with name no_such_bitable_table does not exist!
+
+# Fallthrough: a file-like name is handed back to DuckDB unchanged (which then
+# resolves it through its own replacement scans or reports it as unknown).
+statement error
+SELECT * FROM 'no_such_file.parquet';
+----
+Catalog Error: Table with name no_such_file.parquet does not exist!
+
+# Fallthrough: non Feishu/Lark hosts are never intercepted, so the URL reaches
+# DuckDB's own handling instead of the Bitable scan.
+statement error
+SELECT * FROM 'ftp://sample.feishu.cn/base/bascn123456';
+----
+Catalog Error: Table with name ftp://sample.feishu.cn/base/bascn123456 does not exist!
+
+# Ordinary HTTPS URLs and lookalike domains are left to DuckDB's own table
+# resolution; the replacement callback must not claim them as Bitables.
+statement error
+SELECT * FROM 'https://example.com/base/bascn123456';
+----
+Missing Extension Error: File https://example.com/base/bascn123456 requires the extension httpfs to be loaded
+
+statement error
+SELECT * FROM 'https://feishu.cn.example.com/base/bascn123456';
+----
+Missing Extension Error: File https://feishu.cn.example.com/base/bascn123456 requires the extension httpfs to be loaded

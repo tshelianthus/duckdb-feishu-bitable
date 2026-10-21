@@ -1,0 +1,78 @@
+#
+# Protected, real-API SQLLogicTests. Public callers may omit all secrets: in
+# that case the credential-check job warns and the online job is skipped.
+#
+name: Online SQL Tests
+
+on:
+  workflow_call:
+    secrets:
+      FEISHU_TEST_APP_ID:
+        required: false
+      FEISHU_TEST_APP_SECRET:
+        required: false
+      FEISHU_TEST_APP_TOKEN:
+        required: false
+      FEISHU_TEST_URL:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sql-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  credentials:
+    name: Check online test credentials
+    runs-on: ubuntu-latest
+    # Resolve environment-scoped secrets here as well as in the test job.
+    # Otherwise they would be incorrectly classified as unavailable.
+    environment: integration-tests
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        name: Check optional secret set
+        env:
+          FEISHU_TEST_APP_ID: ${{ secrets.FEISHU_TEST_APP_ID }}
+          FEISHU_TEST_APP_SECRET: ${{ secrets.FEISHU_TEST_APP_SECRET }}
+          FEISHU_TEST_APP_TOKEN: ${{ secrets.FEISHU_TEST_APP_TOKEN }}
+          FEISHU_TEST_URL: ${{ secrets.FEISHU_TEST_URL }}
+        shell: bash
+        run: |
+          missing=0
+          for name in FEISHU_TEST_APP_ID FEISHU_TEST_APP_SECRET FEISHU_TEST_APP_TOKEN FEISHU_TEST_URL; do
+            if [ -z "${!name}" ]; then
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 1 ]; then
+            echo "::warning::Feishu online SQL tests skipped: optional integration-test secrets are not configured."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  sql-tests:
+    name: Run online SQLLogicTests
+    needs: credentials
+    if: needs.credentials.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    environment: integration-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build debug extension
+        run: make debug
+
+      - name: Run protected integration tests
+        env:
+          FEISHU_TEST_APP_ID: ${{ secrets.FEISHU_TEST_APP_ID }}
+          FEISHU_TEST_APP_SECRET: ${{ secrets.FEISHU_TEST_APP_SECRET }}
+          FEISHU_TEST_APP_TOKEN: ${{ secrets.FEISHU_TEST_APP_TOKEN }}
+          FEISHU_TEST_URL: ${{ secrets.FEISHU_TEST_URL }}
+        run: make test_sql_online_debug

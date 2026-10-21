@@ -1,0 +1,114 @@
+# name: test/sql/metadata_fields.test
+# description: offline bind and schema tests for feishu_bitable_fields
+# group: [sql]
+
+require feishu_bitable
+
+# LIMIT 0 and optimizer-eliminated scans must still validate credentials.
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id') LIMIT 0;
+----
+Invalid Input Error: No feishu secret is available
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', SECRET = '__metadata_missing_secret__') LIMIT 0;
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', SECRET = '__metadata_missing_secret__') WHERE false;
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+# Schema discovery validates the local Secret without exchanging a token.
+statement ok
+CREATE TEMPORARY SECRET named_secret (TYPE feishu, APP_ID '<app_id>', APP_SECRET '<app_secret>');
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM feishu_bitable_fields('app_token', 'table_id'));
+----
+field_id	VARCHAR
+field_name	VARCHAR
+type_id	INTEGER
+type_name	VARCHAR
+is_primary	BOOLEAN
+description	VARCHAR
+property_json	JSON
+
+query I
+SELECT count(*)
+FROM (DESCRIBE SELECT * FROM feishu_bitable_fields(
+    'app_token', 'table_id', SECRET = 'named_secret', VIEW_ID = 'view_id'
+));
+----
+7
+
+# Both supported named parameters compose with LIMIT 0 and preserve the full
+# seven-column metadata schema while still entering bind-time validation.
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM feishu_bitable_fields(
+    'app_token', 'table_id', SECRET = 'named_secret', VIEW_ID = 'view_id'
+) LIMIT 0);
+----
+field_id	VARCHAR
+field_name	VARCHAR
+type_id	INTEGER
+type_name	VARCHAR
+is_primary	BOOLEAN
+description	VARCHAR
+property_json	JSON
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', VIEW_ID = NULL) LIMIT 0;
+----
+Invalid Input Error: feishu_bitable_fields: view_id must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_fields(NULL, 'table_id');
+----
+Invalid Input Error: feishu_bitable_fields: app_token must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', NULL);
+----
+Invalid Input Error: feishu_bitable_fields: table_id must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_fields('', 'table_id');
+----
+Invalid Input Error: feishu_bitable_fields: app_token must not be empty
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', '');
+----
+Invalid Input Error: feishu_bitable_fields: table_id must not be empty
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', VIEW_ID = NULL);
+----
+Invalid Input Error: feishu_bitable_fields: view_id must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', VIEW_ID = '');
+----
+Invalid Input Error: feishu_bitable_fields: view_id must not be empty
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', SECRET = '');
+----
+Invalid Input Error: feishu_bitable_fields: secret must not be empty
+
+# Credential resolution happens before any HTTP request.
+statement error
+SELECT count(*) FROM feishu_bitable_fields(
+	'app_token', 'table_id', SECRET = '__metadata_missing_secret__'
+);
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
+
+statement error
+SELECT * FROM feishu_bitable_fields('app_token', 'table_id', PAGE_SIZE = 100);
+----
+Binder Error: Invalid named parameter "PAGE_SIZE" for function feishu_bitable_fields

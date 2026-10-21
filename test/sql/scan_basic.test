@@ -1,0 +1,77 @@
+# name: test/sql/scan_basic.test
+# description: offline bind validation for feishu_bitable_scan
+# group: [sql]
+
+require feishu_bitable
+
+query I
+SELECT count(*)
+FROM duckdb_functions()
+WHERE function_name = 'feishu_bitable_scan' AND function_type = 'table';
+----
+1
+
+statement error
+SELECT * FROM feishu_bitable_scan(NULL, 'table_id');
+----
+Invalid Input Error: feishu_bitable_scan requires non-NULL app_token and table_id
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', NULL);
+----
+Invalid Input Error: feishu_bitable_scan requires non-NULL app_token and table_id
+
+statement error
+SELECT * FROM feishu_bitable_scan('', 'table_id');
+----
+Invalid Input Error: feishu_bitable_scan requires non-empty app_token and table_id
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', SCHEMA_MODE = 'unsupported_mode');
+----
+Invalid Input Error: feishu_bitable_scan schema_mode must be 'typed' or 'json'
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', PAGE_SIZE = 0);
+----
+Invalid Input Error: feishu_bitable_scan page_size must be between 1 and 500
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', PAGE_SIZE = 501);
+----
+Invalid Input Error: feishu_bitable_scan page_size must be between 1 and 500
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', SECRET = NULL);
+----
+Invalid Input Error: feishu_bitable_scan secret must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', SCHEMA_MODE = NULL);
+----
+Invalid Input Error: feishu_bitable_scan schema_mode must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', PAGE_SIZE = NULL);
+----
+Invalid Input Error: feishu_bitable_scan page_size must not be NULL
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', VIEW_ID = '');
+----
+Invalid Input Error: feishu_bitable_scan view_id must not be empty
+
+statement error
+SELECT * FROM feishu_bitable_scan('app_token', 'table_id', INCLUDE_SYSTEM_COLUMNS = NULL);
+----
+Invalid Input Error: feishu_bitable_scan include_system_columns must not be NULL
+
+# Secret resolution precedes any network operation.
+statement error
+SELECT * FROM feishu_bitable_scan(
+    'app_token', 'table_id', SECRET = '__scan_missing_secret__',
+    VIEW_ID = 'view_id', SCHEMA_MODE = 'json', PAGE_SIZE = 1,
+	INCLUDE_SYSTEM_COLUMNS = true
+);
+----
+Invalid Input Error: Feishu secret with the requested name does not exist
