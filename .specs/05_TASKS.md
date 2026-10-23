@@ -9,7 +9,7 @@
 > **执行角色**：🤖 = agent 或 CI 可自动完成；👤 = 必须人工执行（git 写操作、GitHub 网页操作、真实凭据）。
 >
 > 最近一次编排盘点：2026-10-07（范围 B「可用但不发布」目标验收通过）。
-> 最近一次状态回写：2026-10-13（状态回写：PROTO-001 / MANIFEST-001 / PUBLISH-001 / QA-MATRIX-001 已完成；D-2 format/tidy 已本地修复待提交重跑；G-2/公开链仍禁止）。
+> 最近一次状态回写：2026-10-24（D-2 于 run 39737386589 全绿；D-2a 保留 mingw；D-2b 已补 main/tag push 触发器。G-2/公开链仍禁止）。
 
 ---
 
@@ -35,8 +35,8 @@
 **当前待编排任务数：1**（ATTACH-EVAL 仍未批准）。**可立即开发的功能项：0**（快照 QA-MATRIX 已完成；ATTACH-EVAL 需单独批准）。
 仍开着、且**明确不纳入范围 B 收口 / 本期禁止自动执行**的条目：
 - **G-2**、**D-0/D-0a**、**D-4~D-7**、**E-6.3**（社区发布 / 历史重写 / tag / 收录；**本期禁止**）
-可选但不阻塞：批次 D 的 D-2/`workflow_dispatch`（主 pipeline 再跑一轮）。
-Base 离线快照语义已冻结；**实现链 PROTO→MANIFEST→PUBLISH→QA-MATRIX 已于 2026-10-13 获批开工**（ATTACH-EVAL 仍缓）。D-2 继续在 private 下修复质量门后重跑；G-2/公开发布链仍禁止。
+可选但不阻塞：D-2b 的触发器改动需要在 `dev` 上再 dispatch 一次主 pipeline。
+Base 离线快照语义已冻结；**实现链 PROTO→MANIFEST→PUBLISH→QA-MATRIX 已于 2026-10-13 获批开工**（ATTACH-EVAL 仍缓）。D-2 已在 private 下全绿；G-2/公开发布链仍禁止。
 （四要素完整性已由脚本逐条审计通过；`### E-n 系列` 为分组标题，非任务条目。）
 
 **人工发布决策更新（2026-10-13，`WAITING_USER_CONFIRM_G2_COMMANDS`）**：只读审计已确认自建 `app_id` `<redacted_cli_id>` 仍存在于 7 个历史 commit（`af554b6`…`6ad1b46`），当前工作区/`HEAD` 已净（G-1/G-3 ✅）。**G-2 精确命令序列已草拟但未执行**；需用户确认目标分支（本地+远端 `dev`/`main`）、stash 策略与 `force-with-lease` 后再动手。仓库保持 private；**D-0 继续 `HOLD_UNTIL_G2_DOD`**。未见真实 `app_secret`/token 历史泄漏。
@@ -344,7 +344,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 > 原阻塞：默认分支无 `.github/` → `actions/workflows` `total_count=0`，首次 CI 只能走 `dev→main` PR（D-3）。
 > **现状（D-3 ✅）**：PR #1 已合入，`main` 已登记 4 个 workflow，`workflow_dispatch`（D-2 / E-5.6）现已可触发。
 > **Private 引导次序（2026-10-01 用户决策）**：**暂不执行 D-0 / D-0a / G-2 / D-4**；**D-1 → D-3 已完成**；
-> **D-1b 暂缓至 D-0 之后**；下一步可选 D-2/D-2a。
+> **D-1b 暂缓至 D-0 之后**；D-2 与 D-2a 已于 2026-10-24 闭合，D-2b 已落地并等待复跑。
 > **人工发布决策更新（2026-10-13，`WAITING_USER_CONFIRM_G2_COMMANDS`）**：G-2 方案已就绪、未执行；仓库保持 private；D-0 `HOLD_UNTIL_G2_DOD`。
 > 社区收录完整链仍是：G-2 → D-0 → D-0a → D-1b → D-2… → D-4。
 > 各条任务的内容与 DoD 保持下方原文，仅执行次序按本段调整。
@@ -504,7 +504,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 
 ---
 
-### D-2 👤 在 `dev` 上**手动 dispatch** 主 pipeline，三个 job 全绿
+### D-2 ✅ 在 `dev` 上**手动 dispatch** 主 pipeline，三个 job 全绿
 
 - **前置**：D-0、D-1、D-1b。
 - **变更说明**：原 D-2 写的是「**推送 `dev`** 并等待三个 job 全绿」，**在机制上不成立**——
@@ -547,10 +547,15 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
   - **结论**：D-2 已触发并完成观察；三组核心 job **未全绿**，故本条目保持 `[ ]` 未完成。
   - **跟进建议（未自动执行）**：先本地/提交 format-fix（及 tidy 修复）后再重跑 D-2；
     arm64 `137` 属 runner/OOM 类，可在修复质量门后重试观察是否复现。D-2a 仍以前置「D-2 通过」为准。
+- **完成证据（2026-10-24，`dca7727`）**：
+  - Run：[39737386589](https://github.com/tshelianthus/duckdb-feishu-bitable/actions/runs/39737386589)，`workflow_dispatch`，`conclusion=success`。
+  - 已启动并成功：Unit Tests（含 ASan/UBSan）、Format Check、Tidy Check、六个平台二进制构建、Online SQL Tests（含 debug 构建与受保护集成测试）。
+  - 唯一跳过：`Build extension binaries / DuckDB-Wasm`（`exclude_archs` 排除三个 wasm，符合 DoD）。
+  - 不是 `startup_failure`。
 
 ---
 
-### D-2a 🤖 判定并落实 `windows_amd64_mingw` 的去留（**本次审查发现的最大风险**）
+### D-2a ✅ 判定并落实 `windows_amd64_mingw` 的去留（**本次审查发现的最大风险**）
 
 - **前置**：D-2 的运行结果。
 - **背景**：`extension-ci-tools/config/distribution_matrix.json`（子模块 pin `72e76e9`）中
@@ -574,10 +579,11 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
   两处的平台集合**逐项相同**（顺序可不同，用集合比对）；
   且 `grep -n "若该架构构建失败" docs/RELEASE_CHECKLIST.md` 无输出
   （假设性表述已替换为带 run-id 的实测结论）。
+- **完成证据（2026-10-24）**：run [39737386589](https://github.com/tshelianthus/duckdb-feishu-bitable/actions/runs/39737386589) 的 `windows_amd64_mingw` job 为 `success`，因此按决策规则**保持现状**，`exclude_archs` 仍只有 `wasm_mvp;wasm_eh;wasm_threads`。当前干净源码快照没有 `docs/community/description.yml` 与 `docs/RELEASE_CHECKLIST.md`，所以无法回写那两处文档；平台集合没有变化。
 
 ---
 
-### D-2b 🤖 为 `main` 与 tag 补 `push` 触发器
+### D-2b 🤖 为 `main` 与 tag 补 `push` 触发器（触发器已落地，复跑未完成）
 
 - **前置**：D-2 通过（先证明 workflow 本身能跑，再动触发器）。
 - **背景**：社区 5 个样本中 4 个含 `push`（`duckdb/extension-template`、`duckdb/duckdb-avro`、
@@ -602,6 +608,9 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 - **DoD**：`python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/MainDistributionPipeline.yml'));print(d[True])"`
   输出的 `on` 映射同时含 `push`（且 `branches` 为 `['main']`、`tags` 为 `['v*']`）、
   `pull_request`、`workflow_dispatch`；改动后在 `dev` 上再 dispatch 一次仍全绿。
+- **部分完成（2026-10-24）**：`.github/workflows/MainDistributionPipeline.yml` 的 `on` 已改为
+  `push.branches=[main]`、`push.tags=['v*']`、`pull_request`、`workflow_dispatch`；`dev` 的普通 push 仍不触发。
+  **剩余 DoD**：该改动提交后在 `dev` 上再 dispatch 一次并确认全绿。
 
 ---
 
