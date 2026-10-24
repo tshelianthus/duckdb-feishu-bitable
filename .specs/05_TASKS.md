@@ -9,7 +9,7 @@
 > **执行角色**：🤖 = agent 或 CI 可自动完成；👤 = 必须人工执行（git 写操作、GitHub 网页操作、真实凭据）。
 >
 > 最近一次编排盘点：2026-10-07（范围 B「可用但不发布」目标验收通过）。
-> 最近一次状态回写：2026-10-25（D-0 与 D-0a 已完成；未打 tag，未提交社区收录）。
+> 最近一次状态回写：2026-10-25（D-2b 复跑全绿；D-1b 匿名 release 构建与测试通过。未打 tag，未提交社区收录）。
 
 ---
 
@@ -469,7 +469,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 
 ---
 
-### D-1b 🤖 干净检出复现社区 CI 的构建方式
+### D-1b ✅ 干净检出复现社区 CI 的构建方式
 
 - **前置**：D-0（仓库已公开，才能匿名 clone）、D-1。
 - **⏸️ 暂缓至 D-0 之后（2026-10-01）**：本条依赖匿名 `git clone` 公开仓；当前仓库保持
@@ -490,6 +490,10 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 
 - **DoD**：退出码 0；且构建后 `git -C "$D/x" status --short` 除 `build/` 外无意外产物；
   `integration_*.test` 整文件跳过。跑完后 `rm -rf "$D"`。
+- **完成证据（2026-10-25）**：匿名 `git clone --recurse-submodules` 后检出 `dev` @ `e696067`。
+  `GEN=ninja BUILD_WORKERS=2`，并使用 CI 的 vcpkg 工具链、`x64-linux-release` triplet 与 DuckDB vcpkg 缓存。
+  `make release` 退出码 0；`make test_release` 退出码 0，**12 个用例 / 247 assertions**，4 个在线文件因 `require-env` 整文件跳过。
+  `git status --short` 除 `build/` 外为空。
 
 ---
 
@@ -585,7 +589,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 
 ---
 
-### D-2b 🤖 为 `main` 与 tag 补 `push` 触发器（触发器已落地，复跑未完成）
+### D-2b ✅ 为 `main` 与 tag 补 `push` 触发器
 
 - **前置**：D-2 通过（先证明 workflow 本身能跑，再动触发器）。
 - **背景**：社区 5 个样本中 4 个含 `push`（`duckdb/extension-template`、`duckdb/duckdb-avro`、
@@ -610,9 +614,9 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 - **DoD**：`python3 -c "import yaml;d=yaml.safe_load(open('.github/workflows/MainDistributionPipeline.yml'));print(d[True])"`
   输出的 `on` 映射同时含 `push`（且 `branches` 为 `['main']`、`tags` 为 `['v*']`）、
   `pull_request`、`workflow_dispatch`；改动后在 `dev` 上再 dispatch 一次仍全绿。
-- **部分完成（2026-10-24）**：`.github/workflows/MainDistributionPipeline.yml` 的 `on` 已改为
-  `push.branches=[main]`、`push.tags=['v*']`、`pull_request`、`workflow_dispatch`；`dev` 的普通 push 仍不触发。
-  **剩余 DoD**：该改动提交后在 `dev` 上再 dispatch 一次并确认全绿。
+- **完成证据（2026-10-25）**：`.github/workflows/MainDistributionPipeline.yml` 的 `on` 含
+  `push.branches=[main]`、`push.tags=['v*']`、`pull_request`、`workflow_dispatch`；`dev` 的普通 push 不触发。
+  复跑 [40113686076](https://github.com/tshelianthus/duckdb-feishu-bitable/actions/runs/40113686076)，`headSha=e696067`，`conclusion=success`。`integration-tests` 经 Required reviewer 审批后，debug 构建与受保护集成测试均成功。
 
 ---
 
