@@ -9,7 +9,7 @@
 > **执行角色**：🤖 = agent 或 CI 可自动完成；👤 = 必须人工执行（git 写操作、GitHub 网页操作、真实凭据）。
 >
 > 最近一次编排盘点：2026-10-07（范围 B「可用但不发布」目标验收通过）。
-> 最近一次状态回写：2026-10-24（D-2 于 run 39737386589 全绿；D-2a 保留 mingw；D-2b 已补 main/tag push 触发器。G-2/公开链仍禁止）。
+> 最近一次状态回写：2026-10-25（D-0 已执行：仓库 visibility=public，匿名访问 200；未打 tag，未提交社区收录）。
 
 ---
 
@@ -25,7 +25,7 @@
 | Phase 5 健壮性与安全 | ✅ 完成（含 B-2） | B-2 Release RSS 常数内存已于 2026-10-07 验收；见 `docs/FEISHU_TEST_AGENT_PROMPT.md` §十一 |
 | **在线测试层** | ✅ 完成 | F-1/F-2/F-3/F-4/G-4 均已完成；读侧在线回归在模式 A 下真实跑通（非 skip） |
 | **凭据卫生** | 🔴 **自建应用 ID 仍在 git 历史中** | 2026-10-13 只读审计复核：仅 `cli_a965…`，7 commit；工作区净；G-2 方案已就绪，状态 `WAITING_USER_CONFIRM_G2_COMMANDS`；**未执行重写/未转公开** |
-| Phase 6 社区发布 | ⏸️ **本期不做** | private 路径 D-1/D-3 ✅；**禁止** D-0/D-0a/G-2/D-4/D-5/D-6/D-7；社区收录链仍停在 G-2→D-0 之前 |
+| Phase 6 社区发布 | ⏸️ **仓库已公开，收录未做** | D-0 ✅（2026-10-25）；**禁止** D-4/D-5/D-6/D-7 与社区收录 PR |
 | Phase 7 回写（COPY） | ✅ 范围 B 可用；发布不做 | E-2~E-5 全系列 ✅；E-6.1/E-6.2 ✅；**E-6.3 本期禁止** |
 | **批次 H（对标 PG FDW 生态）** | ✅ H-1~H-4 完成 | 谓词 search 下推 + `record_id` 单条 GET + README 三段式；`ORDER BY` 仅文本/数字/日期下推（I-1/I-2） |
 | **批次 I（范围收口后的待验证项）** | ✅ I-1~I-5 完成 | `ORDER BY` 仅 TEXT/NUMBER/DATE_TIME 下推；关联/人员 `COPY` 写入已实现（I-5） |
@@ -34,7 +34,7 @@
 
 **当前待编排任务数：1**（ATTACH-EVAL 仍未批准）。**可立即开发的功能项：0**（快照 QA-MATRIX 已完成；ATTACH-EVAL 需单独批准）。
 仍开着、且**明确不纳入范围 B 收口 / 本期禁止自动执行**的条目：
-- **G-2**、**D-0/D-0a**、**D-4~D-7**、**E-6.3**（社区发布 / 历史重写 / tag / 收录；**本期禁止**）
+- **G-2**、**D-0a**、**D-4~D-7**、**E-6.3**（历史重写不再需要；tag / 社区收录仍禁止）
 可选但不阻塞：D-2b 的触发器改动需要在 `dev` 上再 dispatch 一次主 pipeline。
 Base 离线快照语义已冻结；**实现链 PROTO→MANIFEST→PUBLISH→QA-MATRIX 已于 2026-10-13 获批开工**（ATTACH-EVAL 仍缓）。D-2 已在 private 下全绿；G-2/公开发布链仍禁止。
 （四要素完整性已由脚本逐条审计通过；`### E-n 系列` 为分组标题，非任务条目。）
@@ -356,7 +356,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 
 ---
 
-### D-0 👤 把 GitHub 仓库从 private 改为 public
+### D-0 ✅ 把 GitHub 仓库从 private 改为 public
 
 - **前置**：**批次 G 全部完成**（G-1 ✅ / G-2 / G-3 ✅）。在历史清理完成前执行 D-0 会把
   自建应用 ID 永久公开，且 GitHub 的 fork / 缓存可能使其不可撤回。
@@ -387,6 +387,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
 - **DoD**：`gh api repos/tshelianthus/duckdb-feishu-bitable --jq '.visibility'` 输出 `public`；
   且 `curl -sS -o /dev/null -w '%{http_code}' https://github.com/tshelianthus/duckdb-feishu-bitable`
   在未登录环境下返回 `200`。
+- **完成证据（2026-10-25）**：用户明确批准先公开、不提交社区。新仓库创建于 2026-10-21，全部历史仅 `c1a280a`、`dca7727`、`647418a`，不含旧仓库中的自建应用 ID，因此未执行 G-2。`visibility=public`，匿名访问返回 200。未打 tag，未创建社区收录 PR。
 
 ### D-0a 👤 转公开后补齐 Environment / 分支保护（写测与 main）
 
