@@ -9,7 +9,7 @@
 > **执行角色**：🤖 = agent 或 CI 可自动完成；👤 = 必须人工执行（git 写操作、GitHub 网页操作、真实凭据）。
 >
 > 最近一次编排盘点：2026-10-07（范围 B「可用但不发布」目标验收通过）。
-> 最近一次状态回写：2026-10-25（D-0 已执行：仓库 visibility=public，匿名访问 200；未打 tag，未提交社区收录）。
+> 最近一次状态回写：2026-10-25（D-0 与 D-0a 已完成；未打 tag，未提交社区收录）。
 
 ---
 
@@ -25,7 +25,7 @@
 | Phase 5 健壮性与安全 | ✅ 完成（含 B-2） | B-2 Release RSS 常数内存已于 2026-10-07 验收；见 `docs/FEISHU_TEST_AGENT_PROMPT.md` §十一 |
 | **在线测试层** | ✅ 完成 | F-1/F-2/F-3/F-4/G-4 均已完成；读侧在线回归在模式 A 下真实跑通（非 skip） |
 | **凭据卫生** | 🔴 **自建应用 ID 仍在 git 历史中** | 2026-10-13 只读审计复核：仅 `cli_a965…`，7 commit；工作区净；G-2 方案已就绪，状态 `WAITING_USER_CONFIRM_G2_COMMANDS`；**未执行重写/未转公开** |
-| Phase 6 社区发布 | ⏸️ **仓库已公开，收录未做** | D-0 ✅（2026-10-25）；**禁止** D-4/D-5/D-6/D-7 与社区收录 PR |
+| Phase 6 社区发布 | ⏸️ **仓库已公开，收录未做** | D-0 / D-0a ✅（2026-10-25）；**禁止** D-4/D-5/D-6/D-7 与社区收录 PR |
 | Phase 7 回写（COPY） | ✅ 范围 B 可用；发布不做 | E-2~E-5 全系列 ✅；E-6.1/E-6.2 ✅；**E-6.3 本期禁止** |
 | **批次 H（对标 PG FDW 生态）** | ✅ H-1~H-4 完成 | 谓词 search 下推 + `record_id` 单条 GET + README 三段式；`ORDER BY` 仅文本/数字/日期下推（I-1/I-2） |
 | **批次 I（范围收口后的待验证项）** | ✅ I-1~I-5 完成 | `ORDER BY` 仅 TEXT/NUMBER/DATE_TIME 下推；关联/人员 `COPY` 写入已实现（I-5） |
@@ -34,7 +34,7 @@
 
 **当前待编排任务数：1**（ATTACH-EVAL 仍未批准）。**可立即开发的功能项：0**（快照 QA-MATRIX 已完成；ATTACH-EVAL 需单独批准）。
 仍开着、且**明确不纳入范围 B 收口 / 本期禁止自动执行**的条目：
-- **G-2**、**D-0a**、**D-4~D-7**、**E-6.3**（历史重写不再需要；tag / 社区收录仍禁止）
+- **G-2**、**D-4~D-7**、**E-6.3**（历史重写不再需要；tag / 社区收录仍禁止）
 可选但不阻塞：D-2b 的触发器改动需要在 `dev` 上再 dispatch 一次主 pipeline。
 Base 离线快照语义已冻结；**实现链 PROTO→MANIFEST→PUBLISH→QA-MATRIX 已于 2026-10-13 获批开工**（ATTACH-EVAL 仍缓）。D-2 已在 private 下全绿；G-2/公开发布链仍禁止。
 （四要素完整性已由脚本逐条审计通过；`### E-n 系列` 为分组标题，非任务条目。）
@@ -389,7 +389,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
   在未登录环境下返回 `200`。
 - **完成证据（2026-10-25）**：用户明确批准先公开、不提交社区。新仓库创建于 2026-10-21，全部历史仅 `c1a280a`、`dca7727`、`647418a`，不含旧仓库中的自建应用 ID，因此未执行 G-2。`visibility=public`，匿名访问返回 200。未打 tag，未创建社区收录 PR。
 
-### D-0a 👤 转公开后补齐 Environment / 分支保护（写测与 main）
+### D-0a ✅ 转公开后补齐 Environment / 分支保护（写测与 main）
 
 - **前置**：D-0（仓库已 `public`）。
 - **背景**：E-5.2 已在私有仓配好 `write-tests` 四项 Secret（`FEISHU_WRITE_TEST_APP_TOKEN`、`FEISHU_WRITE_TEST_TABLE_ID`、`FEISHU_WRITE_TEST_APP_ID`、`FEISHU_WRITE_TEST_APP_SECRET`）+ `dev`/`main` 分支白名单；
@@ -408,6 +408,7 @@ D-1b **暂缓至 D-0 之后**（依赖匿名 clone）；D-2/`workflow_dispatch` 
   - `gh secret list`（仓库级）仍无 `FEISHU_WRITE_TEST_*`；
   - `gh api repos/:owner/:repo/branches/main/protection` 不再因计费返回 403
     （规则可先最小集，完整 required checks 可留到 D-3 后）。
+- **完成证据（2026-10-25）**：`integration-tests` 与 `write-tests` 均有 `required_reviewers`（`tshelianthus`）、`wait_timer=1`，部署分支仍仅 `dev`/`main`。仓库级 Secret 仍为空。`main` 已启用分支保护：禁止 force-push 与删除；required status checks 仍留空，等后续 CI 再勾选。
 
 ---
 
