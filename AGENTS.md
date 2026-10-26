@@ -36,8 +36,8 @@ You are an expert systems engineer and database extension specialist working on 
 - Load smoke in CI/local: `make test_debug` (runs `test/sql/feishu_bitable.test`)
 
 ## 4. CI Trigger Policy
-- 普通 `git push origin dev` 不启动主 CI；主 workflow 只保留 `pull_request` 与
-  `workflow_dispatch` 触发方式。
+- 普通 `git push origin dev` 不启动主 CI。主 workflow 的 `push` 只覆盖
+  `main` 与 `v*` tag，另外保留 `pull_request` 与 `workflow_dispatch`。
 - 需要对当前 `dev` 明确启动检查时，使用：
   ```sh
   gh workflow run MainDistributionPipeline.yml --ref dev

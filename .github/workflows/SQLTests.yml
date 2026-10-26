@@ -62,15 +62,38 @@ jobs:
     runs-on: ubuntu-latest
     environment: integration-tests
     steps:
+      # Free disk space BEFORE checkout matching WriteTests.yml to prevent "No space left on device"
+      # errors during debug compilation (e.g. run 39677181928).
+      - name: Free disk space
+        uses: endersonmenezes/free-disk-space@v3
+        continue-on-error: true
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_folders: /opt/az /opt/ghc /opt/google /opt/hostedtoolcache /opt/microsoft /usr/lib/firefox /usr/lib/jvm /usr/local/.ghcup /usr/local/julia* /usr/local/lib/android /usr/local/share/boost /usr/local/share/chromium /usr/local/share/powershell /usr/share/dotnet /usr/share/swift /var/lib/apt/lists/*
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Install ninja
+        run: sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
+
       - name: Build debug extension
+        env:
+          GEN: ninja
+          BUILD_WORKERS: "2"
+          EXT_DEBUG_FLAGS: -DDUCKDB_DEBUG_LINK_JOBS=1
         run: make debug
 
       - name: Run protected integration tests
+        # Re-export build env vars so make test_sql_online_debug does not fail if it re-enters the debug recipe
         env:
+          GEN: ninja
+          BUILD_WORKERS: "2"
+          EXT_DEBUG_FLAGS: -DDUCKDB_DEBUG_LINK_JOBS=1
           FEISHU_TEST_APP_ID: ${{ secrets.FEISHU_TEST_APP_ID }}
           FEISHU_TEST_APP_SECRET: ${{ secrets.FEISHU_TEST_APP_SECRET }}
           FEISHU_TEST_APP_TOKEN: ${{ secrets.FEISHU_TEST_APP_TOKEN }}

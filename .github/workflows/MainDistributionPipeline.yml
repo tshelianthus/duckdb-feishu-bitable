@@ -3,6 +3,9 @@
 #
 name: Main Extension Distribution Pipeline
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -30,8 +33,10 @@ jobs:
       extension_name: feishu_bitable
       # This extension needs native TLS sockets, which the Wasm sandbox cannot
       # provide. Wasm targets are opt_in:false in extension-ci-tools'
-      # distribution_matrix.json, i.e. built unless excluded here. Keep this list
-      # in sync with excluded_platforms in docs/community/description.yml.
+      # distribution_matrix.json, i.e. built unless excluded here.
+      # windows_amd64_mingw stays included: it built successfully on run
+      # 39737386589 (D-2a). The community descriptor is not in this source
+      # snapshot, so that file cannot be updated here.
       exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads'
 
   code-quality-check:
