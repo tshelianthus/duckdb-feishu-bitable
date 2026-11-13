@@ -969,7 +969,8 @@ static void EmitRecordRow(ScanGlobalState &state, DataChunk &output, yyjson_val 
 			if (state.emitted_rows > static_cast<idx_t>(std::numeric_limits<int64_t>::max()) - row) {
 				throw IOException("feishu_bitable: row identifier exceeds BIGINT range");
 			}
-			FlatVector::GetDataMutable<int64_t>(output.data[output_idx])[row] = static_cast<int64_t>(state.emitted_rows + row);
+			FlatVector::GetDataMutable<int64_t>(output.data[output_idx])[row] =
+			    static_cast<int64_t>(state.emitted_rows + row);
 			continue;
 		}
 		yyjson_val *value = nullptr;

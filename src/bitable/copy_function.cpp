@@ -190,11 +190,15 @@ struct FeishuBatchSizeOverride {
 
 //! Set by PlanFeishuCopy for the duration of the re-entrant bind. DuckDB 2.0
 //! removes "batch_size" from the extension option map before copy_to_bind.
-thread_local FeishuBatchSizeOverride feishu_batch_size_override;
+//! Function-local so clang-tidy does not treat the slot as a mutable global.
+FeishuBatchSizeOverride &BatchSizeOverrideSlot() {
+	thread_local FeishuBatchSizeOverride slot;
+	return slot;
+}
 
 idx_t CopyBatchSize(const CopyFunctionBindInput &input) {
-	if (feishu_batch_size_override.present) {
-		return feishu_batch_size_override.value;
+	if (BatchSizeOverrideSlot().present) {
+		return BatchSizeOverrideSlot().value;
 	}
 	auto entry = input.info.options.find(Identifier("batch_size"));
 	if (entry == input.info.options.end() || entry->second.empty()) {
@@ -710,23 +714,22 @@ BoundStatement PlanFeishuCopy(Binder &binder, CopyStatement &stmt) {
 	if (!stmt.info) {
 		throw InvalidInputException("feishu_bitable: COPY statement is missing target information");
 	}
-	feishu_batch_size_override = FeishuBatchSizeOverride();
+	BatchSizeOverrideSlot() = FeishuBatchSizeOverride();
 	auto batch_entry = stmt.info->options.find(Identifier("batch_size"));
 	if (batch_entry != stmt.info->options.end() && !batch_entry->second.empty()) {
 		auto value = batch_entry->second[0].GetValue<int64_t>();
-		if (value < static_cast<int64_t>(COPY_BATCH_SIZE_MIN) ||
-		    value > static_cast<int64_t>(COPY_BATCH_SIZE_MAX)) {
+		if (value < static_cast<int64_t>(COPY_BATCH_SIZE_MIN) || value > static_cast<int64_t>(COPY_BATCH_SIZE_MAX)) {
 			throw InvalidInputException("feishu_bitable: option \"batch_size\" must be between 1 and 500");
 		}
-		feishu_batch_size_override.present = true;
-		feishu_batch_size_override.value = static_cast<idx_t>(value);
+		BatchSizeOverrideSlot().present = true;
+		BatchSizeOverrideSlot().value = static_cast<idx_t>(value);
 	}
 
 	auto &system_catalog = Catalog::GetSystemCatalog(binder.context);
 	auto &catalog_entry = Catalog::GetEntry(
-	    binder.context, EntryLookupInfo(CatalogType::COPY_FUNCTION_ENTRY,
-	                                    QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(),
-	                                                  Identifier(COPY_FORMAT))));
+	    binder.context,
+	    EntryLookupInfo(CatalogType::COPY_FUNCTION_ENTRY,
+	                    QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(), Identifier(COPY_FORMAT))));
 	auto &function = catalog_entry.Cast<CopyFunctionCatalogEntry>().function;
 	static std::mutex rebind_mutex;
 	std::lock_guard<std::mutex> guard(rebind_mutex);
@@ -735,11 +738,11 @@ BoundStatement PlanFeishuCopy(Binder &binder, CopyStatement &stmt) {
 	try {
 		auto result = binder.Bind(static_cast<SQLStatement &>(stmt));
 		function.plan = saved_plan;
-		feishu_batch_size_override = FeishuBatchSizeOverride();
+		BatchSizeOverrideSlot() = FeishuBatchSizeOverride();
 		return result;
 	} catch (...) {
 		function.plan = saved_plan;
-		feishu_batch_size_override = FeishuBatchSizeOverride();
+		BatchSizeOverrideSlot() = FeishuBatchSizeOverride();
 		throw;
 	}
 }

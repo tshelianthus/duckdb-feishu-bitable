@@ -194,9 +194,8 @@ static void TablesScan(ClientContext &context, TableFunctionInput &input, DataCh
 
 void RegisterTablesFunction(ExtensionLoader &loader) {
 	TableFunction function("feishu_bitable_tables", {LogicalType::VARCHAR}, TablesScan, TablesBind, TablesInitGlobal);
-	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
-		options.Add("secret", LogicalType::VARCHAR);
-	});
+	function.GetSignature().WithTypedKwargs("options",
+	                                        [](TypedKwargs &options) { options.Add("secret", LogicalType::VARCHAR); });
 	CreateTableFunctionInfo info(std::move(function));
 	info.descriptions.push_back(
 	    MakeFunctionDescription("List tables in a Feishu/Lark Bitable app (table_id, name, revision).",

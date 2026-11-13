@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 3.5)
 # Set extension name here
 set(TARGET_NAME feishu_bitable)
 
-# DuckDB's extension distribution supports vcpkg. As such, dependencies can be added in ./vcpkg.json and then
-# used in cmake with find_package.
+# DuckDB's extension distribution supports vcpkg. As such, dependencies can be
+# added in ./vcpkg.json and then used in cmake with find_package.
 find_package(OpenSSL REQUIRED)
 
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
@@ -12,7 +12,9 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 
-set(CMAKE_CXX_STANDARD "17" CACHE STRING "C++ standard to enforce")
+set(CMAKE_CXX_STANDARD
+    "17"
+    CACHE STRING "C++ standard to enforce")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(src/include)
@@ -25,9 +27,11 @@ include_directories(src/include)
 set(FEISHU_HTTPLIB_DIR "${CMAKE_CURRENT_BINARY_DIR}/feishu_httplib")
 file(MAKE_DIRECTORY "${FEISHU_HTTPLIB_DIR}")
 execute_process(
-  COMMAND "${CMAKE_COMMAND}" -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/httplib/httplib.hpp
-          -DOUTPUT=${FEISHU_HTTPLIB_DIR}/feishu_httplib.hpp
-          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/prepare_httplib.cmake
+  COMMAND
+    "${CMAKE_COMMAND}"
+    -DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/httplib/httplib.hpp
+    -DOUTPUT=${FEISHU_HTTPLIB_DIR}/feishu_httplib.hpp -P
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/prepare_httplib.cmake
   RESULT_VARIABLE FEISHU_HTTPLIB_RESULT)
 if(NOT FEISHU_HTTPLIB_RESULT EQUAL 0)
   message(FATAL_ERROR "Could not prepare the private httplib header")
@@ -63,9 +67,12 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 target_compile_features(${EXTENSION_NAME} PRIVATE cxx_std_17)
 target_compile_features(${LOADABLE_EXTENSION_NAME} PRIVATE cxx_std_17)
 target_include_directories(${EXTENSION_NAME} PRIVATE "${FEISHU_HTTPLIB_DIR}")
-target_include_directories(${LOADABLE_EXTENSION_NAME} PRIVATE "${FEISHU_HTTPLIB_DIR}")
-target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto duckdb_yyjson)
-target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto duckdb_yyjson)
+target_include_directories(${LOADABLE_EXTENSION_NAME}
+                           PRIVATE "${FEISHU_HTTPLIB_DIR}")
+target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto
+                      duckdb_yyjson)
+target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto
+                      duckdb_yyjson)
 
 install(
   TARGETS ${EXTENSION_NAME}
