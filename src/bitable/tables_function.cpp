@@ -67,8 +67,8 @@ static string RequiredStringArgument(const Value &value, const char *argument_na
 	return result;
 }
 
-static string OptionalNamedString(const named_parameter_map_t &parameters, const string &name) {
-	auto entry = parameters.find(name);
+static string OptionalNamedString(const named_argument_map_t &parameters, const char *name) {
+	auto entry = parameters.find(Identifier(name));
 	if (entry == parameters.end()) {
 		return string();
 	}
@@ -105,7 +105,7 @@ static void FetchNextPage(ClientContext &context, const TablesBindData &bind_dat
 }
 
 static unique_ptr<FunctionData> TablesBind(ClientContext &context, TableFunctionBindInput &input,
-                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                           vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto app_token = RequiredStringArgument(input.inputs[0], "app_token");
 	auto secret_name = OptionalNamedString(input.named_parameters, "secret");
 	// Validate locally even when LIMIT 0 removes initialization and scanning.
@@ -138,11 +138,11 @@ static void TablesScan(ClientContext &context, TableFunctionInput &input, DataCh
 	auto &state = input.global_state->Cast<TablesGlobalState>();
 
 	for (auto &column : output.data) {
-		FlatVector::Validity(column).SetAllValid(STANDARD_VECTOR_SIZE);
+		FlatVector::ValidityMutable(column).SetAllValid(STANDARD_VECTOR_SIZE);
 	}
-	auto table_ids = FlatVector::GetData<string_t>(output.data[0]);
-	auto names = FlatVector::GetData<string_t>(output.data[1]);
-	auto revisions = FlatVector::GetData<int64_t>(output.data[2]);
+	auto table_ids = FlatVector::GetDataMutable<string_t>(output.data[0]);
+	auto names = FlatVector::GetDataMutable<string_t>(output.data[1]);
+	auto revisions = FlatVector::GetDataMutable<int64_t>(output.data[2]);
 	idx_t output_count = 0;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
@@ -170,31 +170,33 @@ static void TablesScan(ClientContext &context, TableFunctionInput &input, DataCh
 			if (row.table_id) {
 				table_ids[output_index] = StringVector::AddString(output.data[0], *row.table_id);
 			} else {
-				FlatVector::Validity(output.data[0]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[0]).SetInvalid(output_index);
 			}
 			if (row.name) {
 				names[output_index] = StringVector::AddString(output.data[1], *row.name);
 			} else {
-				FlatVector::Validity(output.data[1]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[1]).SetInvalid(output_index);
 			}
 			if (row.revision) {
 				revisions[output_index] = *row.revision;
 			} else {
-				FlatVector::Validity(output.data[2]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[2]).SetInvalid(output_index);
 			}
 		}
 		state.buffered_offset += emit_count;
 		output_count += emit_count;
 	}
 
-	output.SetCardinality(output_count);
+	output.SetCardinalityUnsafe(output_count);
 }
 
 } // namespace
 
 void RegisterTablesFunction(ExtensionLoader &loader) {
 	TableFunction function("feishu_bitable_tables", {LogicalType::VARCHAR}, TablesScan, TablesBind, TablesInitGlobal);
-	function.named_parameters["secret"] = LogicalType::VARCHAR;
+	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("secret", LogicalType::VARCHAR);
+	});
 	CreateTableFunctionInfo info(std::move(function));
 	info.descriptions.push_back(
 	    MakeFunctionDescription("List tables in a Feishu/Lark Bitable app (table_id, name, revision).",

@@ -39,7 +39,7 @@ batch_size
 statement error
 COPY (SELECT 1 AS id) TO 'bascnXXXXXXXX' (FORMAT feishu_bitable, batch_size 'abc');
 ----
-Could not convert string 'abc' to INT64
+Copy option "batch_size" expected an argument of type BIGINT
 
 # user_id_type is a registered WRITE_ONLY option (section 8.2); illegal values
 # fail at Bind. Recognition is proven by the absence of Unrecognized option.
@@ -132,7 +132,7 @@ does not exist or is not a usable TYPE feishu secret
 foreach source_type BLOB INTERVAL INTEGER[] VARCHAR[][] DECIMAL(10,2) TIMESTAMP_NS
 
 statement error
-COPY (SELECT NULL::${source_type} AS bad_column WHERE false) TO 'bascnXXXXXXXX'
+COPY (SELECT NULL::{source_type} AS bad_column WHERE false) TO 'bascnXXXXXXXX'
     (FORMAT feishu_bitable, table_id 'tblYYYYYYYY');
 ----
 which cannot be written to Feishu
@@ -162,7 +162,7 @@ foreach batch_limit 1 500
 
 statement error
 COPY (SELECT 1 AS id WHERE false) TO 'bascnXXXXXXXX'
-    (FORMAT feishu_bitable, BATCH_SIZE ${batch_limit});
+    (FORMAT feishu_bitable, BATCH_SIZE {batch_limit});
 ----
 COPY writeback requires a table_id
 
@@ -189,7 +189,7 @@ feishu_bitable: no TYPE feishu secret
 # A missing FORMAT must never be misread as this extension: DuckDB keeps owning
 # format inference and writes a local CSV instead of calling feishu_bitable.
 statement ok
-COPY (SELECT 1 AS id) TO '__TEST_DIR__/feishu_bitable_copy_format_guard.csv';
+COPY (SELECT 1 AS id) TO '{TEST_DIR}/feishu_bitable_copy_format_guard.csv';
 
 # A near-miss format name is resolved by DuckDB's catalog, not by us.
 statement error

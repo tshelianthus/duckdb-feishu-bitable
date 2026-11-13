@@ -12,12 +12,20 @@
 #include "bitable/write_state_machine.hpp"
 #include "secrets/feishu_secret.hpp"
 
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/catalog/entry_lookup_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/parser/qualified_name.hpp"
+#include "duckdb/parser/statement/copy_statement.hpp"
+#include "duckdb/planner/binder.hpp"
+
+#include <mutex>
 #include "duckdb/parser/parsed_data/copy_info.hpp"
 #include "yyjson.hpp"
 
@@ -157,7 +165,7 @@ void FeishuCopyOptions(ClientContext &, CopyOptionsInput &input) {
 vector<unique_ptr<Expression>> CopyToSelect(CopyToSelectInput &input) {
 	std::unordered_set<string> seen_columns;
 	for (auto &expression : input.select_list) {
-		auto name = expression->GetName();
+		auto name = expression->GetName().GetIdentifierName();
 		auto normalized_name = StringUtil::Lower(name);
 		if (!seen_columns.insert(normalized_name).second) {
 			throw InvalidInputException("feishu_bitable: duplicate source column \"" + name + "\" cannot be written");
@@ -168,15 +176,27 @@ vector<unique_ptr<Expression>> CopyToSelect(CopyToSelectInput &input) {
 
 //! Reads a VARCHAR option from the already type-validated COPY option map.
 string CopyOptionString(const CopyFunctionBindInput &input, const string &name) {
-	auto entry = input.info.options.find(name);
+	auto entry = input.info.options.find(Identifier(name));
 	if (entry == input.info.options.end() || entry->second.empty()) {
 		return string();
 	}
 	return entry->second[0].ToString();
 }
 
+struct FeishuBatchSizeOverride {
+	bool present = false;
+	idx_t value = COPY_BATCH_SIZE_DEFAULT;
+};
+
+//! Set by PlanFeishuCopy for the duration of the re-entrant bind. DuckDB 2.0
+//! removes "batch_size" from the extension option map before copy_to_bind.
+thread_local FeishuBatchSizeOverride feishu_batch_size_override;
+
 idx_t CopyBatchSize(const CopyFunctionBindInput &input) {
-	auto entry = input.info.options.find("batch_size");
+	if (feishu_batch_size_override.present) {
+		return feishu_batch_size_override.value;
+	}
+	auto entry = input.info.options.find(Identifier("batch_size"));
 	if (entry == input.info.options.end() || entry->second.empty()) {
 		return COPY_BATCH_SIZE_DEFAULT;
 	}
@@ -189,7 +209,7 @@ idx_t CopyBatchSize(const CopyFunctionBindInput &input) {
 
 //! Section 8.2: only the three exact lowercase values; empty / case variants fail at Bind.
 string CopyUserIdType(const CopyFunctionBindInput &input) {
-	auto entry = input.info.options.find("user_id_type");
+	auto entry = input.info.options.find(Identifier("user_id_type"));
 	if (entry == input.info.options.end() || entry->second.empty()) {
 		return string("open_id");
 	}
@@ -531,8 +551,13 @@ void ValidateWriteColumns(const vector<string> &names, const vector<LogicalType>
 	}
 }
 
-unique_ptr<FunctionData> CopyToBind(ClientContext &context, CopyFunctionBindInput &input, const vector<string> &names,
-                                    const vector<LogicalType> &sql_types) {
+unique_ptr<FunctionData> CopyToBind(ClientContext &context, CopyFunctionBindInput &input,
+                                    const vector<Identifier> &names, const vector<LogicalType> &sql_types) {
+	vector<string> column_names;
+	column_names.reserve(names.size());
+	for (auto &name : names) {
+		column_names.emplace_back(name.GetIdentifierName());
+	}
 	// .specs/03_API_CONTRACT.md section 8.7: DuckDB's Binder consumes most
 	// generic write options before this callback runs, so they are invisible
 	// here. `file_extension` is the one signal that survives, and setting it is
@@ -571,7 +596,7 @@ unique_ptr<FunctionData> CopyToBind(ClientContext &context, CopyFunctionBindInpu
 		    !SourceTypeIsWritable(sql_types[i], WriteTargetKind::MULTI_SELECT) &&
 		    !SourceTypeIsWritable(sql_types[i], WriteTargetKind::LINK) &&
 		    !SourceTypeIsWritable(sql_types[i], WriteTargetKind::USER)) {
-			throw InvalidInputException("feishu_bitable: column \"" + names[i] + "\" has DuckDB type " +
+			throw InvalidInputException("feishu_bitable: column \"" + column_names[i] + "\" has DuckDB type " +
 			                            sql_types[i].ToString() + " which cannot be written to Feishu");
 		}
 	}
@@ -596,9 +621,9 @@ unique_ptr<FunctionData> CopyToBind(ClientContext &context, CopyFunctionBindInpu
 	}
 
 	auto fields = LoadTargetFields(context, *result);
-	result->column_names = names;
+	result->column_names = column_names;
 	result->column_types = sql_types;
-	ValidateWriteColumns(names, sql_types, fields, *result);
+	ValidateWriteColumns(column_names, sql_types, fields, *result);
 	return std::move(result);
 }
 
@@ -659,10 +684,7 @@ CopyFunctionExecutionMode CopyToExecutionMode(bool, bool) {
 	return CopyFunctionExecutionMode::REGULAR_COPY_TO_FILE;
 }
 
-} // namespace
-
-void RegisterCopyFunction(ExtensionLoader &loader) {
-	CopyFunction function(COPY_FORMAT);
+void ConfigureFeishuCopy(CopyFunction &function) {
 	function.copy_to_select = CopyToSelect;
 	function.copy_options = FeishuCopyOptions;
 	function.copy_to_bind = CopyToBind;
@@ -672,6 +694,61 @@ void RegisterCopyFunction(ExtensionLoader &loader) {
 	function.copy_to_combine = CopyToCombine;
 	function.copy_to_finalize = CopyToFinalize;
 	function.execution_mode = CopyToExecutionMode;
+}
+
+CopyFunction FeishuCopyFunction() {
+	CopyFunction function(COPY_FORMAT);
+	ConfigureFeishuCopy(function);
+	return function;
+}
+
+//! DuckDB 2.0 consumes COPY option "batch_size" before copy_to_bind and uses it
+//! as a generic row-group size. Validate the Feishu range while the value is
+//! still visible, then re-enter public Bind with plan cleared so copy_to_bind
+//! runs. BindCopyTo is private, so the catalog entry is the only way back in.
+BoundStatement PlanFeishuCopy(Binder &binder, CopyStatement &stmt) {
+	if (!stmt.info) {
+		throw InvalidInputException("feishu_bitable: COPY statement is missing target information");
+	}
+	feishu_batch_size_override = FeishuBatchSizeOverride();
+	auto batch_entry = stmt.info->options.find(Identifier("batch_size"));
+	if (batch_entry != stmt.info->options.end() && !batch_entry->second.empty()) {
+		auto value = batch_entry->second[0].GetValue<int64_t>();
+		if (value < static_cast<int64_t>(COPY_BATCH_SIZE_MIN) ||
+		    value > static_cast<int64_t>(COPY_BATCH_SIZE_MAX)) {
+			throw InvalidInputException("feishu_bitable: option \"batch_size\" must be between 1 and 500");
+		}
+		feishu_batch_size_override.present = true;
+		feishu_batch_size_override.value = static_cast<idx_t>(value);
+	}
+
+	auto &system_catalog = Catalog::GetSystemCatalog(binder.context);
+	auto &catalog_entry = Catalog::GetEntry(
+	    binder.context, EntryLookupInfo(CatalogType::COPY_FUNCTION_ENTRY,
+	                                    QualifiedName(system_catalog.GetName(), Identifier::DefaultSchema(),
+	                                                  Identifier(COPY_FORMAT))));
+	auto &function = catalog_entry.Cast<CopyFunctionCatalogEntry>().function;
+	static std::mutex rebind_mutex;
+	std::lock_guard<std::mutex> guard(rebind_mutex);
+	auto saved_plan = function.plan;
+	function.plan = nullptr;
+	try {
+		auto result = binder.Bind(static_cast<SQLStatement &>(stmt));
+		function.plan = saved_plan;
+		feishu_batch_size_override = FeishuBatchSizeOverride();
+		return result;
+	} catch (...) {
+		function.plan = saved_plan;
+		feishu_batch_size_override = FeishuBatchSizeOverride();
+		throw;
+	}
+}
+
+} // namespace
+
+void RegisterCopyFunction(ExtensionLoader &loader) {
+	auto function = FeishuCopyFunction();
+	function.plan = PlanFeishuCopy;
 	loader.RegisterFunction(std::move(function));
 }
 

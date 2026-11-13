@@ -72,8 +72,8 @@ static string RequiredStringArgument(const Value &value, const char *argument_na
 	return result;
 }
 
-static string OptionalNamedString(const named_parameter_map_t &parameters, const string &name) {
-	auto entry = parameters.find(name);
+static string OptionalNamedString(const named_argument_map_t &parameters, const char *name) {
+	auto entry = parameters.find(Identifier(name));
 	if (entry == parameters.end()) {
 		return string();
 	}
@@ -119,7 +119,7 @@ static void FetchNextPage(ClientContext &context, const FieldsBindData &bind_dat
 }
 
 static unique_ptr<FunctionData> FieldsBind(ClientContext &context, TableFunctionBindInput &input,
-                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                           vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto app_token = RequiredStringArgument(input.inputs[0], "app_token");
 	auto table_id = RequiredStringArgument(input.inputs[1], "table_id");
 	auto secret_name = OptionalNamedString(input.named_parameters, "secret");
@@ -156,15 +156,15 @@ static void FieldsScan(ClientContext &context, TableFunctionInput &input, DataCh
 	auto &state = input.global_state->Cast<FieldsGlobalState>();
 
 	for (auto &column : output.data) {
-		FlatVector::Validity(column).SetAllValid(STANDARD_VECTOR_SIZE);
+		FlatVector::ValidityMutable(column).SetAllValid(STANDARD_VECTOR_SIZE);
 	}
-	auto field_ids = FlatVector::GetData<string_t>(output.data[0]);
-	auto field_names = FlatVector::GetData<string_t>(output.data[1]);
-	auto type_ids = FlatVector::GetData<int32_t>(output.data[2]);
-	auto type_names = FlatVector::GetData<string_t>(output.data[3]);
-	auto is_primary = FlatVector::GetData<bool>(output.data[4]);
-	auto descriptions = FlatVector::GetData<string_t>(output.data[5]);
-	auto properties = FlatVector::GetData<string_t>(output.data[6]);
+	auto field_ids = FlatVector::GetDataMutable<string_t>(output.data[0]);
+	auto field_names = FlatVector::GetDataMutable<string_t>(output.data[1]);
+	auto type_ids = FlatVector::GetDataMutable<int32_t>(output.data[2]);
+	auto type_names = FlatVector::GetDataMutable<string_t>(output.data[3]);
+	auto is_primary = FlatVector::GetDataMutable<bool>(output.data[4]);
+	auto descriptions = FlatVector::GetDataMutable<string_t>(output.data[5]);
+	auto properties = FlatVector::GetDataMutable<string_t>(output.data[6]);
 	idx_t output_count = 0;
 
 	while (output_count < STANDARD_VECTOR_SIZE) {
@@ -192,44 +192,44 @@ static void FieldsScan(ClientContext &context, TableFunctionInput &input, DataCh
 			if (row.field_id) {
 				field_ids[output_index] = StringVector::AddString(output.data[0], *row.field_id);
 			} else {
-				FlatVector::Validity(output.data[0]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[0]).SetInvalid(output_index);
 			}
 			if (row.field_name) {
 				field_names[output_index] = StringVector::AddString(output.data[1], *row.field_name);
 			} else {
-				FlatVector::Validity(output.data[1]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[1]).SetInvalid(output_index);
 			}
 			if (row.type_id) {
 				type_ids[output_index] = *row.type_id;
 			} else {
-				FlatVector::Validity(output.data[2]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[2]).SetInvalid(output_index);
 			}
 			if (row.type_name) {
 				type_names[output_index] = StringVector::AddString(output.data[3], *row.type_name);
 			} else {
-				FlatVector::Validity(output.data[3]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[3]).SetInvalid(output_index);
 			}
 			if (row.is_primary) {
 				is_primary[output_index] = *row.is_primary;
 			} else {
-				FlatVector::Validity(output.data[4]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[4]).SetInvalid(output_index);
 			}
 			if (row.description) {
 				descriptions[output_index] = StringVector::AddString(output.data[5], *row.description);
 			} else {
-				FlatVector::Validity(output.data[5]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[5]).SetInvalid(output_index);
 			}
 			if (row.property_json) {
 				properties[output_index] = StringVector::AddString(output.data[6], *row.property_json);
 			} else {
-				FlatVector::Validity(output.data[6]).SetInvalid(output_index);
+				FlatVector::ValidityMutable(output.data[6]).SetInvalid(output_index);
 			}
 		}
 		state.buffered_offset += emit_count;
 		output_count += emit_count;
 	}
 
-	output.SetCardinality(output_count);
+	output.SetCardinalityUnsafe(output_count);
 }
 
 } // namespace
@@ -237,8 +237,10 @@ static void FieldsScan(ClientContext &context, TableFunctionInput &input, DataCh
 void RegisterFieldsFunction(ExtensionLoader &loader) {
 	TableFunction function("feishu_bitable_fields", {LogicalType::VARCHAR, LogicalType::VARCHAR}, FieldsScan,
 	                       FieldsBind, FieldsInitGlobal);
-	function.named_parameters["secret"] = LogicalType::VARCHAR;
-	function.named_parameters["view_id"] = LogicalType::VARCHAR;
+	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("secret", LogicalType::VARCHAR);
+		options.Add("view_id", LogicalType::VARCHAR);
+	});
 	CreateTableFunctionInfo info(std::move(function));
 	info.descriptions.push_back(MakeFunctionDescription(
 	    "List field metadata for a Feishu/Lark Bitable table (field_id, type, primary flag, property_json).",

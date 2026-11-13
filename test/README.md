@@ -22,7 +22,7 @@ runner's error-message skip list for the rest of that file. All existing
 `statement ok` and `query` checks therefore fail on unexpected request errors,
 including errors in later scans, with the original error and a nonzero exit code.
 
-DuckDB v1.5.5 defaults to skipping errors containing `HTTP` (also matching
+DuckDB v2.0.0 defaults to skipping errors containing `HTTP` (also matching
 `HTTPS`) or `Unable to connect`. See `TestConfiguration::ErrorMessagesToBeSkipped`
 in `duckdb/test/helpers/test_config.cpp`, `TestResultHelper::SkipErrorMessage` in
 `duckdb/test/sqlite/result_helper.cpp`, and the `SQLLOGIC_SET` branch in

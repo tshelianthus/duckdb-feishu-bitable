@@ -17,7 +17,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(src/include)
 
-# DuckDB 1.5.5's bundled httplib retries SSLPeerCouldBeClosed_ inside one
+# DuckDB 2.0.0's bundled httplib retries SSLPeerCouldBeClosed_ inside one
 # request, even after a POST body may have been sent. Generate a private copy
 # with that implicit replay removed; read-side retry policy remains in
 # api_client.cpp, while write-side calls can conservatively report an unknown

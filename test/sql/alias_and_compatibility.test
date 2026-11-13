@@ -82,7 +82,7 @@ WHERE function_name = 'feishu_bitable_scan' AND function_type = 'table';
 statement error
 SELECT * FROM feishu_bitable_scan('bascn123456');
 ----
-Binder Error: No function matches the given name and argument types 'feishu_bitable_scan(VARCHAR)'
+Binder Error: No function matches the given name and argument types 'feishu_bitable_scan(STRING_LITERAL)'
 
 statement error
 SELECT * FROM feishu_bitable_scan('bascn123456', 'tbl789012', table_id := 'tblOther');

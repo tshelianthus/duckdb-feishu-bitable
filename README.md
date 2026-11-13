@@ -248,7 +248,7 @@ SELECT * FROM feishu_bitable_scan(
 
 ### 限制（Limitations）
 
-注意：DuckDB v1.5.5 的 TableFunction 没有 LIMIT 下推接口，本扩展**不做** LIMIT 下推；
+注意：DuckDB v2.0.0 的 TableFunction 没有 LIMIT 下推接口，本扩展**不做** LIMIT 下推；
 提前终止是"每次扫描调用只拉取一页、DuckDB 拿够行数后不再回调"的自然结果。
 
 谓词下推仅覆盖已验证的扁平子集。SQL `ORDER BY` 只对 Typed 模式的文本、数字、日期列下推（默认空值在最后，且不能带 `VIEW_ID`）；其他类型、`NULLS FIRST` 和带 `VIEW_ID` 的排序仍在 DuckDB 本地执行。日期字段只下推可编码为官方 `ExactDate` 的

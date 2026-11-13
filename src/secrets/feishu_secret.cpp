@@ -56,7 +56,7 @@ unique_ptr<BaseSecret> CreateFeishuSecret(ClientContext &context, CreateSecretIn
 }
 
 const KeyValueSecret &RequireFeishuKeyValueSecret(const SecretEntry &entry, const string &description) {
-	if (!entry.secret || !StringUtil::CIEquals(entry.secret->GetType(), FEISHU_SECRET_TYPE)) {
+	if (!entry.secret || entry.secret->GetType() != FEISHU_SECRET_TYPE) {
 		throw InvalidInputException("Secret %s is not a feishu secret", description);
 	}
 	auto secret = dynamic_cast<const KeyValueSecret *>(entry.secret.get());
@@ -68,7 +68,7 @@ const KeyValueSecret &RequireFeishuKeyValueSecret(const SecretEntry &entry, cons
 
 string RequireCredentialValue(const KeyValueSecret &secret, const string &key, const string &description) {
 	Value value;
-	if (!secret.TryGetValue(key, value) || value.IsNull()) {
+	if (!secret.TryGetValue(Identifier(key), value) || value.IsNull()) {
 		throw InvalidInputException("Feishu secret %s is missing required credentials", description);
 	}
 	string result;
@@ -132,7 +132,7 @@ FeishuCredentials GetFeishuCredentials(ClientContext &context, const string &sec
 	FeishuCredentials result;
 
 	Value user_token_value;
-	if (secret.TryGetValue(USER_ACCESS_TOKEN_KEY, user_token_value) && !user_token_value.IsNull()) {
+	if (secret.TryGetValue(Identifier(USER_ACCESS_TOKEN_KEY), user_token_value) && !user_token_value.IsNull()) {
 		result.user_access_token = user_token_value.GetValue<string>();
 		if (result.user_access_token.empty()) {
 			throw InvalidInputException("Feishu secret %s contains empty USER_ACCESS_TOKEN", description);

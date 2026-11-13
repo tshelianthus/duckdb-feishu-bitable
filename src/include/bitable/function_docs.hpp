@@ -8,17 +8,18 @@ namespace feishu {
 
 //! Build catalog FunctionDescription for community-page / duckdb_functions() metadata.
 //!
-//! Scalar / aggregate: set real parameter_names (e.g. {"name"}) so duckdb_functions()
-//! does not fall back to col0/col1.
+//! DuckDB 2.0 duckdb_functions() prefers FunctionSignature parameter names when that
+//! vector is the same length as the parameter types. FunctionDescription::parameter_names
+//! is only the fallback used when the counts differ; missing slots become colN.
 //!
-//! Table functions with named_parameters: leave parameter_names empty. DuckDB 1.5.x
-//! GetParameterNames either (a) uses the fallback path — positionals as colN, named
-//! params by their real names — or (b) uses a flat parameter_names list aligned to
-//! GetParameterTypes, which also walks the unordered named_parameters map. Snapshotting
-//! that map at registration time is not stable across TableFunction copies, so filling
-//! parameter_names either mis-pairs names/types or turns named params into colN.
-//! Keep description / examples / categories; fix positional names when DuckDB grows a
-//! hybrid path.
+//! Scalars: name the signature parameter itself (SetName). A description entry of
+//! "name" does not override a signature parameter that is still called col0.
+//!
+//! Table functions: positional arguments stay colN (AddParameter(LogicalType)).
+//! Optional named arguments are TypedKwargs options (WithTypedKwargs). A keyword-only
+//! parameter without a default is required, so omitting it fails overload resolution
+//! before bind. duckdb_functions() lists those options after the positional names.
+//! Leave description parameter_names empty so the signature names are reported.
 inline FunctionDescription MakeFunctionDescription(string description, vector<string> examples,
                                                    vector<LogicalType> parameter_types = {},
                                                    vector<string> parameter_names = {},

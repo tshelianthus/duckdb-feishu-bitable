@@ -249,13 +249,13 @@ feishu_bitable_scan(
 - **Catalog 元数据**：公开入口通过 `CreateTableFunctionInfo` / `CreateScalarFunctionInfo` 写入
   每个 overload 的 `description`、`examples` 与可选 `categories`；社区扩展页面与 SQL 侧
   agent 发现面均来自该注册元数据，而非 `description.yml` 模板。
-  - **标量**：必须填写真实 `parameter_names`（禁止 `col0`）。本扩展唯一标量为 §7.1。
-  - **带命名参数的表函数**：`parameter_names` **保持为空**。DuckDB 1.5.x 的
-    `GetParameterNames` 在 `parameter_names` 非空时用扁平行列对齐 `GetParameterTypes`
-    （含 `unordered_map` 的 named_parameters）；注册时快照的顺序在 `TableFunction` 拷贝后
-    不稳定，硬填要么名/类型错位，要么把命名参数也变成 `colN`。留空则走 fallback：
-    位置参数显示为 `col0`/`col1`，命名参数保留真实名（`secret` / `view_id` / …）。
-    这是上游限制（见 duckdb#15876），不是本扩展疏漏；`description` / `examples` 仍必须填。
+  - **标量**：签名参数必须 `SetName` 成真实名字（禁止停留在 `col0`）。
+    `FunctionDescription::parameter_names` 只在长度与签名不一致时才生效。本扩展唯一标量为 §7.1。
+  - **带命名参数的表函数**：可选命名参数用 `GetSignature().WithTypedKwargs` 注册。
+    不带默认值的 keyword-only 参数在 DuckDB 2.0 里是必填的，调用方省略后根本选不中重载。
+    `FunctionDescription::parameter_names` **保持为空**。`duckdb_functions()` 先列出签名里的
+    位置参数名（`col0`/`col1`），再列出 TypedKwargs 选项的真实名（`secret` / `view_id` / …）。
+    `description` / `examples` 仍必须填。
   - `parameter_types`（FunctionDescription 内）只列位置参数类型，供 overload 匹配。
 
 ### 7.1 内部 load-smoke 标量（非公开 API）
@@ -266,8 +266,8 @@ feishu_bitable(name VARCHAR) -> VARCHAR
 
 - **用途**：站立门禁 / 载入冒烟；返回 `'feishu_bitable ready: ' || name`。
 - **元数据**：`description` 标明 “Internal load-smoke helper...; not part of the public API.”；
-  `parameter_names = {"name"}`（DuckDB v1.5.5 的 `FunctionEntry` 不持久化 `CreateInfo.comment`，
-  故以 description 为准）；`categories = {"internal"}`。
+  签名参数名为 `name`，同时保留 `parameter_names = {"name"}`（description 不覆盖等长签名，
+  名字以签名为准）；`categories = {"internal"}`。
 - **契约边界**：不出现在文档的公开入口表中；不作为业务调用面。
 
 ---
@@ -320,6 +320,9 @@ COPY <src> TO '<target>' (FORMAT feishu_bitable [, table_id '<tbl...>'] [, secre
 - 未知选项由 DuckDB `copy_options` 机制自动产生
   `Unrecognized option "<x>" for feishu_bitable` 并附候选建议，本扩展不自行拦截。
 - 选项类型错误（如 `batch_size 'abc'`）由 DuckDB 的选项转换层拒绝，扩展可假定进入 Bind 的值类型正确。
+- DuckDB 2.0 会把名为 `batch_size` 的 COPY 选项先当成通用 row group 大小从扩展选项表里拿走。
+  扩展在 `copy_to_bind` 之前校验 `[1, 500]`，并把通过校验的值留在 bind 仍能读到的位置，
+  因此越界仍然在 Bind 失败，合法值仍然决定飞书 `batch_create` 的批大小。
 - **不提供 `view_id`**：视图对追加写入无意义。
 
 ### 8.3 写入类型映射表
@@ -401,7 +404,7 @@ feishu_bitable: column "<col>" maps to unknown Feishu field type <id>; refusing 
 
 - `COPY` 返回**单列 `Count BIGINT`**。该列由 DuckDB 在 `PhysicalCopyToFile::Sink` / `Combine` 中
   自行累加（`l.total_rows_copied += chunk.size()`），**扩展无法改写、也无法新增任何额外统计列（例如失败计数列）**
-  （DuckDB v1.5.5 的 `CopyFunctionReturnType` 只有 `CHANGED_ROWS` /
+  （DuckDB v2.0.0 的 `CopyFunctionReturnType` 只有 `CHANGED_ROWS` /
   `CHANGED_ROWS_AND_FILE_LIST` / `WRITTEN_FILE_STATISTICS` 三种固定形状）。
 - 因此语义定为"**提交给写入算子的行数**"，且**只在整条 `COPY` 成功时可见**；
   任何失败一律抛异常，不返回部分计数。

@@ -14,6 +14,7 @@
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/types/vector_buffer.hpp"
 #include "duckdb/common/enums/order_type.hpp"
 #include "duckdb/main/config.hpp"
@@ -191,11 +192,11 @@ static string FieldNamesJson(const vector<string> &names) {
 }
 
 static void SetInvalid(Vector &vector, idx_t row) {
-	FlatVector::Validity(vector).SetInvalid(row);
+	FlatVector::ValidityMutable(vector).SetInvalid(row);
 }
 
 static void WriteString(Vector &vector, idx_t row, const string &value) {
-	FlatVector::GetData<string_t>(vector)[row] = StringVector::AddString(vector, value);
+	FlatVector::GetDataMutable<string_t>(vector)[row] = StringVector::AddString(vector, value);
 }
 
 static void WriteList(Vector &vector, idx_t row, yyjson_val *value) {
@@ -207,17 +208,17 @@ static void WriteList(Vector &vector, idx_t row, yyjson_val *value) {
 	auto length = static_cast<idx_t>(entries_json.size());
 	auto offset = ListVector::GetListSize(vector);
 	ListVector::Reserve(vector, offset + length);
-	auto entries = FlatVector::GetData<list_entry_t>(vector);
+	auto entries = FlatVector::GetDataMutable<list_entry_t>(vector);
 	entries[row].offset = offset;
 	entries[row].length = length;
-	auto &child_vector = ListVector::GetEntry(vector);
-	auto child_data = FlatVector::GetData<string_t>(child_vector);
+	auto &child_vector = ListVector::GetChildMutable(vector);
+	auto child_data = FlatVector::GetDataMutable<string_t>(child_vector);
 	for (idx_t i = 0; i < length; i++) {
 		if (entries_json[i].is_null) {
-			FlatVector::Validity(child_vector).SetInvalid(offset + i);
+			FlatVector::ValidityMutable(child_vector).SetInvalid(offset + i);
 			continue;
 		}
-		FlatVector::Validity(child_vector).SetValid(offset + i);
+		FlatVector::ValidityMutable(child_vector).SetValid(offset + i);
 		child_data[offset + i] = StringVector::AddString(child_vector, entries_json[i].value);
 	}
 	ListVector::SetListSize(vector, offset + length);
@@ -244,7 +245,7 @@ static void WriteTypedValue(Vector &vector, idx_t row, yyjson_val *value, const 
 			SetInvalid(vector, row);
 			return;
 		}
-		FlatVector::GetData<double>(vector)[row] = number;
+		FlatVector::GetDataMutable<double>(vector)[row] = number;
 		break;
 	}
 	case LogicalTypeId::BOOLEAN: {
@@ -253,7 +254,7 @@ static void WriteTypedValue(Vector &vector, idx_t row, yyjson_val *value, const 
 			SetInvalid(vector, row);
 			return;
 		}
-		FlatVector::GetData<bool>(vector)[row] = boolean;
+		FlatVector::GetDataMutable<bool>(vector)[row] = boolean;
 		break;
 	}
 	case LogicalTypeId::TIMESTAMP: {
@@ -262,7 +263,7 @@ static void WriteTypedValue(Vector &vector, idx_t row, yyjson_val *value, const 
 			SetInvalid(vector, row);
 			return;
 		}
-		FlatVector::GetData<timestamp_t>(vector)[row] = timestamp_t(microseconds);
+		FlatVector::GetDataMutable<timestamp_t>(vector)[row] = timestamp_t(microseconds);
 		break;
 	}
 	case LogicalTypeId::LIST:
@@ -362,8 +363,8 @@ static void LoadFields(ClientContext &context, ScanBindData &bind_data) {
 	}
 }
 
-static string GetNamedString(TableFunctionBindInput &input, const string &key, const string &function_name) {
-	auto entry = input.named_parameters.find(key);
+static string GetNamedString(TableFunctionBindInput &input, const char *key, const string &function_name) {
+	auto entry = input.named_parameters.find(Identifier(key));
 	if (entry == input.named_parameters.end()) {
 		return string();
 	}
@@ -445,9 +446,9 @@ static string ResolveFirstTableId(ClientContext &context, const ScanBindData &bi
 //! gsheets-style ergonomics: a browser URL as first argument, an optional
 //! `table` named parameter, and the default first table fallback.
 static unique_ptr<FunctionData> ScanBindInternal(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names,
+                                                 vector<LogicalType> &return_types, vector<Identifier> &names,
                                                  bool modern_interface) {
-	auto &function_name = input.table_function.name;
+	const string function_name = input.table_function.GetName().GetIdentifierName();
 	auto result = make_uniq<ScanBindData>();
 	if (!modern_interface) {
 		if (input.inputs.size() != 2 || input.inputs[0].IsNull() || input.inputs[1].IsNull()) {
@@ -500,7 +501,7 @@ static unique_ptr<FunctionData> ScanBindInternal(ClientContext &context, TableFu
 	} else {
 		throw InvalidInputException("%s schema_mode must be 'typed' or 'json'", function_name);
 	}
-	auto page_size_entry = input.named_parameters.find("page_size");
+	auto page_size_entry = input.named_parameters.find(Identifier("page_size"));
 	if (page_size_entry != input.named_parameters.end()) {
 		if (page_size_entry->second.IsNull()) {
 			throw InvalidInputException("%s page_size must not be NULL", function_name);
@@ -511,7 +512,7 @@ static unique_ptr<FunctionData> ScanBindInternal(ClientContext &context, TableFu
 		}
 		result->page_size = static_cast<idx_t>(page_size);
 	}
-	auto system_entry = input.named_parameters.find("include_system_columns");
+	auto system_entry = input.named_parameters.find(Identifier("include_system_columns"));
 	if (system_entry != input.named_parameters.end()) {
 		if (system_entry->second.IsNull()) {
 			throw InvalidInputException("%s include_system_columns must not be NULL", function_name);
@@ -530,7 +531,7 @@ static unique_ptr<FunctionData> ScanBindInternal(ClientContext &context, TableFu
 		throw InvalidInputException("feishu_bitable: target table has no fields");
 	}
 	for (idx_t i = 0; i < result->fields.size(); i++) {
-		names.push_back(result->fields[i].field_name);
+		names.push_back(Identifier(result->fields[i].field_name));
 		return_types.push_back(MapFeishuFieldType(result->fields[i].type_id, result->schema_mode));
 	}
 	if (result->include_system_columns) {
@@ -541,18 +542,21 @@ static unique_ptr<FunctionData> ScanBindInternal(ClientContext &context, TableFu
 		names.push_back("updated_time");
 		return_types.push_back(LogicalType::TIMESTAMP);
 	}
-	result->result_names = names;
+	result->result_names.reserve(names.size());
+	for (auto &name : names) {
+		result->result_names.emplace_back(name.GetIdentifierName());
+	}
 	result->result_types = return_types;
 	return std::move(result);
 }
 
 static unique_ptr<FunctionData> ScanBind(ClientContext &context, TableFunctionBindInput &input,
-                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	return ScanBindInternal(context, input, return_types, names, false);
 }
 
 static unique_ptr<FunctionData> ReadBind(ClientContext &context, TableFunctionBindInput &input,
-                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	return ScanBindInternal(context, input, return_types, names, true);
 }
 
@@ -642,8 +646,7 @@ static RecordIdPredicate ClassifyRecordIdExpression(Expression &expr, const Logi
 		predicate.kind = RecordIdPredicateKind::OTHER;
 		return predicate;
 	}
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-	    expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
+	if (!BoundComparisonExpression::IsComparison(expr) || expr.GetExpressionType() != ExpressionType::COMPARE_EQUAL) {
 		// Inequalities / IS NULL / OR / IN on record_id are not H-3 shapes.
 		predicate.kind = RecordIdPredicateKind::NON_EQUALITY;
 		return predicate;
@@ -651,29 +654,31 @@ static RecordIdPredicate ClassifyRecordIdExpression(Expression &expr, const Logi
 
 	const idx_t record_id_column = bind_data.fields.size();
 	auto &column_ids = get.GetColumnIds();
-	auto &cmp = expr.Cast<BoundComparisonExpression>();
+	auto &comparison = expr.Cast<BoundFunctionExpression>();
+	auto &left = BoundComparisonExpression::Left(comparison);
+	auto &right = BoundComparisonExpression::Right(comparison);
 
-	auto resolve_column = [&](Expression &side) -> optional_idx {
+	auto resolve_column = [&](const Expression &side) -> optional_idx {
 		if (side.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return optional_idx();
 		}
-		auto &ref = side.Cast<BoundColumnRefExpression>();
-		if (ref.binding.table_index != get.table_index || ref.binding.column_index >= column_ids.size()) {
+		auto &binding = side.Cast<BoundColumnRefExpression>().Binding();
+		if (binding.table_index != get.table_index || binding.column_index >= column_ids.size()) {
 			return optional_idx();
 		}
-		return optional_idx(column_ids[ref.binding.column_index].GetPrimaryIndex());
+		return optional_idx(column_ids[binding.column_index].GetPrimaryIndex());
 	};
 
-	optional_ptr<BoundConstantExpression> constant;
+	optional_ptr<const BoundConstantExpression> constant;
 	optional_idx column_id;
-	if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-	    cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		column_id = resolve_column(*cmp.left);
-		constant = &cmp.right->Cast<BoundConstantExpression>();
-	} else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-	           cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		column_id = resolve_column(*cmp.right);
-		constant = &cmp.left->Cast<BoundConstantExpression>();
+	if (left.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		column_id = resolve_column(left);
+		constant = &right.Cast<BoundConstantExpression>();
+	} else if (right.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		column_id = resolve_column(right);
+		constant = &left.Cast<BoundConstantExpression>();
 	}
 	if (!column_id.IsValid() || !constant) {
 		predicate.kind = RecordIdPredicateKind::OTHER;
@@ -683,25 +688,26 @@ static RecordIdPredicate ClassifyRecordIdExpression(Expression &expr, const Logi
 		predicate.kind = RecordIdPredicateKind::OTHER;
 		return predicate;
 	}
-	if (constant->value.IsNull() || constant->value.type().id() != LogicalTypeId::VARCHAR) {
+	const auto &constant_value = constant->GetValue();
+	if (constant_value.IsNull() || constant_value.type().id() != LogicalTypeId::VARCHAR) {
 		predicate.kind = RecordIdPredicateKind::NON_EQUALITY;
 		return predicate;
 	}
 	predicate.kind = RecordIdPredicateKind::EQUALITY;
-	predicate.equality_value = StringValue::Get(constant->value);
+	predicate.equality_value = StringValue::Get(constant_value);
 	return predicate;
 }
 
-static optional_idx ResolveScanColumnId(Expression &side, const LogicalGet &get) {
+static optional_idx ResolveScanColumnId(const Expression &side, const LogicalGet &get) {
 	if (side.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return optional_idx();
 	}
-	auto &ref = side.Cast<BoundColumnRefExpression>();
+	auto &binding = side.Cast<BoundColumnRefExpression>().Binding();
 	auto &column_ids = get.GetColumnIds();
-	if (ref.binding.table_index != get.table_index || ref.binding.column_index >= column_ids.size()) {
+	if (binding.table_index != get.table_index || binding.column_index >= column_ids.size()) {
 		return optional_idx();
 	}
-	return optional_idx(column_ids[ref.binding.column_index].GetPrimaryIndex());
+	return optional_idx(column_ids[binding.column_index].GetPrimaryIndex());
 }
 
 static bool TryMapCompareToSearchOperator(ExpressionType type, bool swapped, SearchOperator &out) {
@@ -781,21 +787,23 @@ static bool TryConstantToSearchAtom(const Value &value, SearchAtomicPredicate &a
 //! System columns (record_id / timestamps) and non-comparison shapes refuse.
 static bool TryClassifySearchAtomic(Expression &expr, const LogicalGet &get, const ScanBindData &bind_data,
                                     SearchAtomicPredicate &atom) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+	if (!BoundComparisonExpression::IsComparison(expr)) {
 		return false;
 	}
-	auto &cmp = expr.Cast<BoundComparisonExpression>();
-	optional_ptr<BoundConstantExpression> constant;
+	auto &comparison = expr.Cast<BoundFunctionExpression>();
+	auto &left = BoundComparisonExpression::Left(comparison);
+	auto &right = BoundComparisonExpression::Right(comparison);
+	optional_ptr<const BoundConstantExpression> constant;
 	optional_idx column_id;
 	bool swapped = false;
-	if (cmp.left->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-	    cmp.right->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		column_id = ResolveScanColumnId(*cmp.left, get);
-		constant = &cmp.right->Cast<BoundConstantExpression>();
-	} else if (cmp.right->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
-	           cmp.left->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		column_id = ResolveScanColumnId(*cmp.right, get);
-		constant = &cmp.left->Cast<BoundConstantExpression>();
+	if (left.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	    right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		column_id = ResolveScanColumnId(left, get);
+		constant = &right.Cast<BoundConstantExpression>();
+	} else if (right.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	           left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		column_id = ResolveScanColumnId(right, get);
+		constant = &left.Cast<BoundConstantExpression>();
 		swapped = true;
 	}
 	if (!column_id.IsValid() || !constant) {
@@ -813,7 +821,7 @@ static bool TryClassifySearchAtomic(Expression &expr, const LogicalGet &get, con
 	atom.field_name = bind_data.fields[field_idx].field_name;
 	atom.type_id = bind_data.fields[field_idx].type_id;
 	atom.op = op;
-	return TryConstantToSearchAtom(constant->value, atom);
+	return TryConstantToSearchAtom(constant->GetValue(), atom);
 }
 
 static bool TryCollectSearchAtoms(Expression &expr, const LogicalGet &get, const ScanBindData &bind_data,
@@ -824,7 +832,7 @@ static bool TryCollectSearchAtoms(Expression &expr, const LogicalGet &get, const
 				return false;
 			}
 			auto &conj = expr.Cast<BoundConjunctionExpression>();
-			for (auto &child : conj.children) {
+			for (auto &child : conj.GetChildren()) {
 				if (!TryCollectSearchAtoms(*child, get, bind_data, expected_inner, atoms)) {
 					return false;
 				}
@@ -859,7 +867,7 @@ static bool TryFlattenSearchFilters(vector<unique_ptr<Expression>> &filters, con
 	    filters[0]->GetExpressionType() == ExpressionType::CONJUNCTION_OR) {
 		conjunction = SearchConjunction::OR;
 		auto &conj = filters[0]->Cast<BoundConjunctionExpression>();
-		for (auto &child : conj.children) {
+		for (auto &child : conj.GetChildren()) {
 			SearchAtomicPredicate atom;
 			if (child->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION ||
 			    !TryClassifySearchAtomic(*child, get, bind_data, atom)) {
@@ -926,10 +934,10 @@ static void PushdownScanFilters(ClientContext &, LogicalGet &get, FunctionData *
 
 static void PrepareOutputVectors(DataChunk &output) {
 	for (idx_t output_idx = 0; output_idx < output.ColumnCount(); output_idx++) {
-		FlatVector::Validity(output.data[output_idx]).SetAllValid(STANDARD_VECTOR_SIZE);
+		FlatVector::ValidityMutable(output.data[output_idx]).SetAllValid(STANDARD_VECTOR_SIZE);
 		if (output.data[output_idx].GetType().id() == LogicalTypeId::LIST) {
 			ListVector::SetListSize(output.data[output_idx], 0);
-			FlatVector::Validity(ListVector::GetEntry(output.data[output_idx])).Reset();
+			FlatVector::ValidityMutable(ListVector::GetChildMutable(output.data[output_idx])).Reset();
 		}
 	}
 }
@@ -951,7 +959,7 @@ static void EmitRecordRow(ScanGlobalState &state, DataChunk &output, yyjson_val 
 			if (output.data[output_idx].GetType().id() != LogicalTypeId::BOOLEAN) {
 				throw IOException("feishu_bitable: invalid empty projection column type");
 			}
-			FlatVector::GetData<bool>(output.data[output_idx])[row] = true;
+			FlatVector::GetDataMutable<bool>(output.data[output_idx])[row] = true;
 			continue;
 		}
 		if (column_id == COLUMN_IDENTIFIER_ROW_ID) {
@@ -961,7 +969,7 @@ static void EmitRecordRow(ScanGlobalState &state, DataChunk &output, yyjson_val 
 			if (state.emitted_rows > static_cast<idx_t>(std::numeric_limits<int64_t>::max()) - row) {
 				throw IOException("feishu_bitable: row identifier exceeds BIGINT range");
 			}
-			FlatVector::GetData<int64_t>(output.data[output_idx])[row] = static_cast<int64_t>(state.emitted_rows + row);
+			FlatVector::GetDataMutable<int64_t>(output.data[output_idx])[row] = static_cast<int64_t>(state.emitted_rows + row);
 			continue;
 		}
 		yyjson_val *value = nullptr;
@@ -1001,7 +1009,7 @@ static void ScanFunction(ClientContext &context, TableFunctionInput &input, Data
 			return state.api.Get(request_url, AuthorizationHeaders(state.access_token));
 		});
 		if (IsSingleRecordNotFound(response.status_code, response.body)) {
-			output.SetCardinality(0);
+			output.SetCardinalityUnsafe(0);
 			return;
 		}
 		EnsureReadHttpSuccess(response.status_code, response.body);
@@ -1014,13 +1022,13 @@ static void ScanFunction(ClientContext &context, TableFunctionInput &input, Data
 			throw IOException("feishu_bitable: malformed single-record response from Feishu API");
 		}
 		if (!record || yyjson_is_null(record)) {
-			output.SetCardinality(0);
+			output.SetCardinalityUnsafe(0);
 			return;
 		}
 		PrepareOutputVectors(output);
 		EmitRecordRow(state, output, record, 0);
 		state.emitted_rows = 1;
-		output.SetCardinality(1);
+		output.SetCardinalityUnsafe(1);
 		return;
 	}
 
@@ -1075,7 +1083,7 @@ static void ScanFunction(ClientContext &context, TableFunctionInput &input, Data
 				state.consecutive_empty_pages = 0;
 			}
 			if (row_count > 0 || !state.has_more) {
-				output.SetCardinality(row_count);
+				output.SetCardinalityUnsafe(row_count);
 				return;
 			}
 		}
@@ -1123,14 +1131,14 @@ static void ScanFunction(ClientContext &context, TableFunctionInput &input, Data
 			state.consecutive_empty_pages = 0;
 		}
 		if (row_count > 0 || !state.has_more) {
-			output.SetCardinality(row_count);
+			output.SetCardinalityUnsafe(row_count);
 			return;
 		}
 	}
 }
 
 static bool IsFeishuScan(const LogicalGet &get) {
-	auto &name = get.function.name;
+	const auto &name = get.function.GetName();
 	return name == "feishu_bitable_scan" || name == "read_feishu_bitable" || name == "read_bitable";
 }
 
@@ -1144,18 +1152,19 @@ static optional_idx ResolveOrderColumn(Expression &expr, LogicalOperator &source
 		return optional_idx();
 	}
 	auto &ref = expr.Cast<BoundColumnRefExpression>();
-	if (ref.depth != 0 || !StringType::GetCollation(ref.return_type).empty()) {
+	if (ref.Depth() != 0 || !StringType::GetCollation(ref.GetReturnType()).empty()) {
 		return optional_idx();
 	}
 	if (source.type == LogicalOperatorType::LOGICAL_PROJECTION) {
 		auto &projection = source.Cast<LogicalProjection>();
-		if (ref.binding.table_index != projection.table_index ||
-		    ref.binding.column_index >= projection.expressions.size()) {
+		auto &binding = ref.Binding();
+		if (binding.table_index != projection.table_index || binding.column_index >= projection.expressions.size()) {
 			return optional_idx();
 		}
-		auto &inner = *projection.expressions[ref.binding.column_index];
+		auto &inner = *projection.expressions[binding.column_index];
 		if (inner.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
-		    inner.Cast<BoundColumnRefExpression>().depth != 0 || !StringType::GetCollation(inner.return_type).empty()) {
+		    inner.Cast<BoundColumnRefExpression>().Depth() != 0 ||
+		    !StringType::GetCollation(inner.GetReturnType()).empty()) {
 			return optional_idx();
 		}
 		return ResolveScanColumnId(inner, get);
@@ -1173,7 +1182,7 @@ static bool TryCollectEquivalentSorts(const LogicalOrder &order, LogicalOperator
 	    bind_data.schema_mode != SchemaMode::TYPED || !bind_data.search_plan.sorts.empty()) {
 		return false;
 	}
-	if (!get.table_filters.filters.empty() || (get.dynamic_filters && get.dynamic_filters->HasFilters())) {
+	if (get.table_filters.HasFilters() || (get.dynamic_filters && get.dynamic_filters->HasFilters())) {
 		return false;
 	}
 	for (auto &node : order.orders) {
@@ -1273,11 +1282,15 @@ static void OptimizeFeishuSortPushdown(OptimizerExtensionInput &, unique_ptr<Log
 }
 
 static void AddSharedNamedParameters(TableFunction &function) {
-	function.named_parameters["secret"] = LogicalType::VARCHAR;
-	function.named_parameters["view_id"] = LogicalType::VARCHAR;
-	function.named_parameters["schema_mode"] = LogicalType::VARCHAR;
-	function.named_parameters["page_size"] = LogicalType::INTEGER;
-	function.named_parameters["include_system_columns"] = LogicalType::BOOLEAN;
+	// Typed kwargs stay optional. Keyword-only parameters without defaults are
+	// required, so a call that omits secret would no longer bind.
+	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("secret", LogicalType::VARCHAR);
+		options.Add("view_id", LogicalType::VARCHAR);
+		options.Add("schema_mode", LogicalType::VARCHAR);
+		options.Add("page_size", LogicalType::INTEGER);
+		options.Add("include_system_columns", LogicalType::BOOLEAN);
+	});
 }
 
 } // namespace
@@ -1304,7 +1317,8 @@ void RegisterScanFunction(ExtensionLoader &loader) {
 		                        vector<LogicalType> {LogicalType::VARCHAR, LogicalType::VARCHAR}}) {
 			TableFunction read(name, arguments, ScanFunction, ReadBind, ScanInitGlobal);
 			AddSharedNamedParameters(read);
-			read.named_parameters["table_id"] = LogicalType::VARCHAR;
+			read.GetSignature().ExtendTypedKwargs(
+			    [](TypedKwargs &options) { options.Add("table_id", LogicalType::VARCHAR); });
 			read.projection_pushdown = true;
 			read.pushdown_complex_filter = PushdownScanFilters;
 			function_set.AddFunction(std::move(read));
