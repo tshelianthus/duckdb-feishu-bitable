@@ -10,7 +10,7 @@
 
 公共 PR CI 与社区 CI 不注入 Feishu 凭据。它们必须通过构建、扩展加载、离线 SQLLogicTest、Catch2 单元测试和代码质量检查；在线文件因缺少 `require-env` 变量而跳过属于预期通过状态。真实 API 测试只允许在私有或受保护的手动/内部 job 中运行，凭据以 CI Secret 映射为进程环境变量，不得写入日志、命令行参数或仓库文件。
 
-本地在线门禁将凭据保存在未纳入版本控制的根目录 `.env.local`：`make test_debug` 与 `make test_release` 的内部 runner 都会在该文件存在时以 Bash 导出其变量；文件不存在时，两者都保持上游的直接执行行为。因此 Debug 与 Release 对在线文件的执行/跳过条件完全一致。受保护 CI 通过 `.github/workflows/SQLTests.yml` 的可选 `workflow_call` secrets 供给同名环境变量；凭据检查 job 与实际测试 job 均绑定 `integration-tests` environment，因此 environment-scoped secrets 不会被误判为缺失；缺失时显式 warning 并跳过在线 job，存在时不吞掉 HTTP/连接错误。
+本地在线门禁将凭据保存在未纳入版本控制的根目录 `.env.local`：`make test_debug` 与 `make test_release` 的内部 runner 都会在该文件存在时以 Bash 导出其变量；文件不存在时，两者都保持上游的直接执行行为。因此 Debug 与 Release 对在线文件的执行/跳过条件完全一致。受保护 CI 通过 `.github/workflows/SQLTests.yml` 的可选 `workflow_call` secrets 供给同名环境变量。`push` 与 `workflow_dispatch` 的凭据检查 job 和实际测试 job 绑定 `integration-tests`，因此 environment-scoped secrets 不会被误判为缺失。`pull_request` 不绑定该环境：部署分支只有 `dev` 和 `main`，绑定后 GitHub 会在步骤开始前拒绝部署并把检查标成失败。公共 PR 因此看不到凭据，检查 job 发出 warning，在线 job 跳过。缺失时显式 warning 并跳过在线 job，存在时不吞掉 HTTP/连接错误。
 
 自动化在线门控变量为：`FEISHU_TEST_APP_ID`、`FEISHU_TEST_APP_SECRET`、`FEISHU_TEST_APP_TOKEN`、`FEISHU_TEST_URL`。`FEISHU_TEST_TABLE_ID`、`FEISHU_TEST_EMPTY_TABLE_ID` 与 `FEISHU_TEST_PAGINATION_TABLE_ID` 仅用于人工探查，不是当前 `integration_*.test` 的自动化门禁变量。
 
