@@ -6,6 +6,8 @@ file(READ "${INPUT}" HTTPLIB_SOURCE)
 set(UNSAFE_RETRY [=[  if (error == Error::SSLPeerCouldBeClosed_) {
     assert(!ret);
     ret = send_(req, res, error);
+    // If still failing with SSLPeerCouldBeClosed_, convert to Read error
+    if (error == Error::SSLPeerCouldBeClosed_) { error = Error::Read; }
   }]=])
 set(SAFE_NO_RETRY [=[  // Do not replay a request after bytes may have been sent. The
   // extension's caller classifies this outcome and decides whether a retry is

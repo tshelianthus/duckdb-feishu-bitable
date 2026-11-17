@@ -70,7 +70,7 @@
 - 记录扫描额外使用有界的近期游标检查与固定最大页数保险；不保留与总页数线性增长的完整游标集合，超过页数上限时以错误终止。
 - **Pushdown 支持**：
   - **Projection Pushdown**：根据 SQL 实际查询的列，在向飞书发起 records API 时仅请求对应的 `field_names`，避免拉取未使用的字段。
-  - **Limit 提前终止**：DuckDB v1.5.5 的 `TableFunction` 未提供 limit 下推接口（仅有 `projection_pushdown` / `filter_pushdown` / `sampling_pushdown`，`TableFunctionInitInput` 也不携带 limit）。本扩展改由惰性分页达成等效效果：每次 `scan` 调用只请求一页，`LIMIT N` 满足后执行器停止拉取，后续分页请求不再发出。
+  - **Limit 提前终止**：DuckDB v2.0.0 的 `TableFunction` 未提供 limit 下推接口（仅有 `projection_pushdown` / `filter_pushdown` / `sampling_pushdown`，`TableFunctionInitInput` 也不携带 limit）。本扩展改由惰性分页达成等效效果：每次 `scan` 调用只请求一页，`LIMIT N` 满足后执行器停止拉取，后续分页请求不再发出。
 
 ### 2.3 Network & Resilience
 - 内置带抖动的指数退避机制（针对 HTTP 429 Too Many Requests 及服务瞬态故障）。

@@ -35,6 +35,9 @@ void FeishuBitableSmokeScalarFun(DataChunk &args, ExpressionState &state, Vector
 
 void RegisterSmokeScalar(ExtensionLoader &loader) {
 	ScalarFunction smoke("feishu_bitable", {LogicalType::VARCHAR}, LogicalType::VARCHAR, FeishuBitableSmokeScalarFun);
+	// duckdb_functions() reports the signature name. Description parameter_names
+	// no longer override a matching signature, which would otherwise show col0.
+	smoke.GetSignature().GetParameter(0).SetName("name");
 	CreateScalarFunctionInfo info(std::move(smoke));
 	info.descriptions.push_back(feishu::MakeFunctionDescription(
 	    "Internal load-smoke helper for extension tests; not part of the public API.",
@@ -51,7 +54,7 @@ unique_ptr<TableRef> BitableReplacementScan(ClientContext &context, ReplacementS
 		return nullptr;
 	}
 	vector<unique_ptr<ParsedExpression>> children;
-	children.push_back(make_uniq<ConstantExpression>(Value(table_name)));
+	children.push_back(ConstantExpression::String(table_name));
 	auto table_function = make_uniq<TableFunctionRef>();
 	table_function->function = make_uniq<FunctionExpression>("read_feishu_bitable", std::move(children));
 	return std::move(table_function);

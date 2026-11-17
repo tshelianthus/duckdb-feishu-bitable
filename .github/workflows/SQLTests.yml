@@ -27,9 +27,13 @@ jobs:
   credentials:
     name: Check online test credentials
     runs-on: ubuntu-latest
-    # Resolve environment-scoped secrets here as well as in the test job.
-    # Otherwise they would be incorrectly classified as unavailable.
-    environment: integration-tests
+    # Environment secrets live on integration-tests, whose deployment branches
+    # are only dev and main. A pull_request ref is rejected before any step
+    # runs, which fails the job instead of the intended warn-and-skip.
+    # Leave the environment unset on pull_request: secrets stay empty, this
+    # job warns, and the online job is skipped. push / workflow_dispatch on
+    # dev or main still bind the environment so a configured secret is used.
+    environment: ${{ github.event_name != 'pull_request' && 'integration-tests' || '' }}
     outputs:
       available: ${{ steps.check.outputs.available }}
     steps:
@@ -58,7 +62,9 @@ jobs:
   sql-tests:
     name: Run online SQLLogicTests
     needs: credentials
-    if: needs.credentials.outputs.available == 'true'
+    # A pull request never deploys integration-tests. Keep this job from
+    # requesting that environment even if a repository secret is visible.
+    if: github.event_name != 'pull_request' && needs.credentials.outputs.available == 'true'
     runs-on: ubuntu-latest
     environment: integration-tests
     steps:
