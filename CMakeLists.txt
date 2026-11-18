@@ -74,6 +74,15 @@ target_link_libraries(${EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto
 target_link_libraries(${LOADABLE_EXTENSION_NAME} OpenSSL::SSL OpenSSL::Crypto
                       duckdb_yyjson)
 
+# httplib reads macOS Keychain roots from this extension's own objects. OpenSSL
+# does not pull those frameworks onto the loadable link line.
+if(APPLE)
+  target_link_libraries(${EXTENSION_NAME} "-framework CoreFoundation"
+                        "-framework Security")
+  target_link_libraries(${LOADABLE_EXTENSION_NAME} "-framework CoreFoundation"
+                        "-framework Security")
+endif()
+
 install(
   TARGETS ${EXTENSION_NAME}
   EXPORT "${DUCKDB_EXPORT_SET}"
