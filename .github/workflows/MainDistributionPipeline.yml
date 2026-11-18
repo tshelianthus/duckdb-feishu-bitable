@@ -31,9 +31,6 @@ jobs:
       duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: feishu_bitable
-      # Pull requests otherwise run reduced CI and skip osx_arm64. This branch
-      # has to build that target to verify the Keychain framework link.
-      reduced_ci_mode: disabled
       # This extension needs native TLS sockets, which the Wasm sandbox cannot
       # provide. Wasm targets are opt_in:false in extension-ci-tools'
       # distribution_matrix.json, i.e. built unless excluded here.
